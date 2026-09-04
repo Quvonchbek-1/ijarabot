@@ -7,7 +7,7 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
 API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
 SEEN_FILE = "seen_ids.txt"
-USD_RATE = 12800  # 1 USD uchun taxminiy so'm kursi
+USD_RATE = 12800
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -19,24 +19,46 @@ def save_seen_id(item_id):
     with open(SEEN_FILE, "a") as f:
         f.write(f"{item_id}\n")
 
-def send_telegram_media_group(caption, photos):
-    # Maksimum 10 ta rasm albom ko'rinishida yuboriladi
-    media = []
-    for idx, photo in enumerate(photos[:10]):
-        photo_url = photo.get("link", "").replace("{width}", "1000").replace("{height}", "750")
-        if idx == 0:
-            media.append({"type": "photo", "media": photo_url, "caption": caption, "parse_mode": "HTML"})
-        else:
-            media.append({"type": "photo", "media": photo_url})
+def send_telegram(caption, photos):
+    valid_photos = []
+    for photo in photos[:10]:
+        link = photo.get("link", "")
+        if link:
+            url = link.replace("{width}", "1000").replace("{height}", "750")
+            valid_photos.append(url)
 
-    if media:
+    # 1. Rasmlar 2 va undan ko'p bo'lsa -> Albom yuborish
+    if len(valid_photos) >= 2:
+        media = []
+        for idx, photo_url in enumerate(valid_photos):
+            if idx == 0:
+                media.append({"type": "photo", "media": photo_url, "caption": caption, "parse_mode": "HTML"})
+            else:
+                media.append({"type": "photo", "media": photo_url})
+        
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
         res = requests.post(url, json={"chat_id": CHANNEL_ID, "media": media})
+
+    # 2. Rasm faqat 1 ta bo'lsa -> Bitta rasm yuborish
+    elif len(valid_photos) == 1:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        res = requests.post(url, json={
+            "chat_id": CHANNEL_ID,
+            "photo": valid_photos[0],
+            "caption": caption,
+            "parse_mode": "HTML"
+        })
+
+    # 3. Rasm bo'lmasa -> Oddiy matn yuborish
     else:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        res = requests.post(url, json={"chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML"})
-    
-    print(f"Telegram yuborish holati: {res.status_code}")
+        res = requests.post(url, json={
+            "chat_id": CHANNEL_ID,
+            "text": caption,
+            "parse_mode": "HTML"
+        })
+
+    print(f"Telegram javobi: {res.status_code}")
 
 def main():
     seen_ids = load_seen_ids()
@@ -61,6 +83,7 @@ def main():
     for item in offers[:5]:
         item_id = str(item.get("id"))
         if item_id in seen_ids:
+            print(f"E'lon {item_id} bazada bor, o'tkazib yuborildi.")
             continue
 
         title = item.get("title", "Yangi e'lon")
@@ -118,7 +141,7 @@ def main():
             f"🔗 <a href='{link}'>E'lon va bog'lanish havolasi</a>"
         )
 
-        send_telegram_media_group(caption, photos)
+        send_telegram(caption, photos)
         save_seen_id(item_id)
         print(f"Yangi e'lon yuborildi: {title}")
 
