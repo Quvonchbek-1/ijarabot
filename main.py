@@ -1,6 +1,7 @@
 import os
-from curl_cffi import requests
+import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
@@ -28,28 +29,28 @@ def send_telegram(title, price, link, photo_url=None):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML"}
     
-    res = requests.post(url, json=payload, impersonate="chrome120")
+    res = requests.post(url, json=payload)
     print(f"Telegram javobi: {res.status_code}")
 
 def main():
     seen_ids = load_seen_ids()
     
-    # Chrome 120 brauzerining TLS barmoq izini simulyatsiya qilish
-    res = requests.get(
-        OLX_URL,
-        impersonate="chrome120",
-        headers={
-            "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8,en;q=0.7",
-            "Referer": "https://www.olx.uz/",
-        }
-    )
-    print(f"OLX Javob kodi: {res.status_code}")
-    
-    if res.status_code != 200:
-        print("OLX sahifasiga ulanib bo'lmadi")
-        return
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1280, 'height': 800}
+        )
+        page = context.new_page()
+        
+        print("OLX sahifasi Chrome orqali ochilmoqda...")
+        page.goto(OLX_URL, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(5000)
+        
+        html = page.content()
+        browser.close()
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("div", {"data-cy": "l-card"})
     print(f"Topilgan e'lonlar soni: {len(cards)}")
 
