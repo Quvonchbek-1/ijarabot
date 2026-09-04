@@ -1,12 +1,12 @@
 import os
 import requests
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from curl_cffi import requests as cffi_requests
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-OLX_URL = "https://www.olx.uz/d/oz/nedvizhimost/kvartiry/dolgosrochnaya-arenda-kvartir/tashkent/"
+# OLX Tashkent kvartiralar ijarasi ichki API-si
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&category_id=1121"
 SEEN_FILE = "seen_ids.txt"
 
 def load_seen_ids():
@@ -21,13 +21,10 @@ def save_seen_id(item_id):
 
 def send_telegram(title, price, link, photo_url=None):
     caption = f"🏠 <b>{title}</b>\n\n💰 <b>Narxi:</b> {price}\n\n🔗 <a href='{link}'>OLX-da ko'rish</a>"
-    
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/" + ("sendPhoto" if photo_url else "sendMessage")
+    payload = {"chat_id": CHANNEL_ID, "caption" if photo_url else "text": caption, "parse_mode": "HTML"}
     if photo_url:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        payload = {"chat_id": CHANNEL_ID, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
-    else:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML"}
+        payload["photo"] = photo_url
     
     res = requests.post(url, json=payload)
     print(f"Telegram javobi: {res.status_code}")
@@ -35,68 +32,44 @@ def send_telegram(title, price, link, photo_url=None):
 def main():
     seen_ids = load_seen_ids()
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080},
-            locale="ru-RU"
-        )
-        page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        print("OLX sahifasiga kirilmoqda...")
-        page.goto(OLX_URL, wait_until="domcontentloaded", timeout=60000)
-        
-        # Sahifa sarlavhasini tekshirish (Cloudflare ushlab qolganini bilish uchun)
-        print(f"Sahifa sarlavhasi: {page.title()}")
-        
-        # Sahifa pastiga ozgina skroll qilish (e'lonlar yuklanishi uchun)
-        page.evaluate("window.scrollTo(0, 1000)")
-        page.wait_for_timeout(5000)
-        
-        html = page.content()
-        browser.close()
-
-    soup = BeautifulSoup(html, "html.parser")
+    res = cffi_requests.get(
+        API_URL,
+        impersonate="chrome120",
+        headers={
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8",
+            "Referer": "https://www.olx.uz/"
+        }
+    )
+    print(f"API Javob kodi: {res.status_code}")
     
-    # Har xil turdagi OLX e'lon konteynerlarini qidirish
-    cards = soup.find_all("div", {"data-cy": "l-card"})
-    if not cards:
-        cards = soup.find_all("div", {"data-testid": "l-card"})
-    if not cards:
-        cards = [a.parent for a in soup.find_all("a", href=True) if "/d/obyavlenie/" in a["href"]]
+    if res.status_code != 200:
+        print("API ga ulanib bo'lmadi")
+        return
 
-    print(f"Topilgan e'lonlar soni: {len(cards)}")
+    data = res.json()
+    offers = data.get("data", [])
+    print(f"Topilgan e'lonlar soni: {len(offers)}")
 
-    for card in cards[:5]:
-        link_tag = card.find("a", href=True)
-        if not link_tag:
+    for item in offers[:5]:
+        item_id = str(item.get("id"))
+        if item_id in seen_ids:
             continue
+
+        title = item.get("title", "Yangi e'lon")
+        link = item.get("url", "")
         
-        href = link_tag["href"]
-        link = "https://www.olx.uz" + href if href.startswith("/") else href
-        item_id = card.get("id", link)
+        params = item.get("params", [])
+        price = "Ko'rsatilmagan"
+        for p in params:
+            if p.get("key") == "price":
+                price = p.get("value", {}).get("label", "Ko'rsatilmagan")
+                break
 
-        if str(item_id) in seen_ids:
-            continue
-
-        title_tag = card.find("h6") or card.find("h4") or card.find("h3")
-        title = title_tag.text.strip() if title_tag else "Yangi e'lon"
-
-        price_tag = card.find("p", {"data-testid": "ad-price"}) or card.find("p", {"data-cy": "ad-price"})
-        price = price_tag.text.strip() if price_tag else "Ko'rsatilmagan"
-
-        img_tag = card.find("img")
-        photo_url = img_tag["src"] if img_tag and "src" in img_tag.attrs else None
+        photos = item.get("photos", [])
+        photo_url = None
+        if photos:
+            photo_url = photos[0].get("link", "").replace("{width}", "1000").replace("{height}", "750")
 
         send_telegram(title, price, link, photo_url)
         save_seen_id(item_id)
