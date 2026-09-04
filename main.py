@@ -5,8 +5,8 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Toshkent shahri (location_id=15) - Uylar ijarasi (category_id=1143)
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&category_id=1143&location_id=15"
+# Toshkent shahri ijaraga kvartiralar API adresi
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
 SEEN_FILE = "seen_ids.txt"
 
 def load_seen_ids():
@@ -30,10 +30,11 @@ def send_telegram(caption, photo_url=None):
         payload["photo"] = photo_url
     
     res = requests.post(url, json=payload)
-    print(f"Telegram javobi: {res.status_code}")
+    print(f"Telegram yuborish holati: {res.status_code} - {res.text}")
 
 def main():
     seen_ids = load_seen_ids()
+    print(f"Bazada bor IDlar soni: {len(seen_ids)}")
     
     res = cffi_requests.get(
         API_URL,
@@ -44,24 +45,26 @@ def main():
             "Referer": "https://www.olx.uz/"
         }
     )
-    print(f"API Javob kodi: {res.status_code}")
+    print(f"OLX API javob kodi: {res.status_code}")
     
     if res.status_code != 200:
-        print("API ga ulanib bo'lmadi")
+        print("API ga ulanishda xatolik bo'ldi")
         return
 
     data = res.json()
     offers = data.get("data", [])
-    print(f"Topilgan e'lonlar soni: {len(offers)}")
+    print(f"OLX dan kelgan e'lonlar soni: {len(offers)}")
 
+    sent_count = 0
     for item in offers[:5]:
         item_id = str(item.get("id"))
+        
         if item_id in seen_ids:
+            print(f"E'lon {item_id} ilgari yuborilgan, o'tkazib yuborildi.")
             continue
 
         title = item.get("title", "Yangi e'lon")
         
-        # Uy ko'rsatkichlarini ajratib olish
         params = item.get("params", [])
         price = "Ko'rsatilmagan"
         rooms = "Ko'rsatilmagan"
@@ -80,7 +83,6 @@ def main():
             elif key == "floor":
                 floor = val
 
-        # Manzil va Klient ma'lumotlari
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "Toshkent")
         district_name = loc_data.get("district", {}).get("name", "")
@@ -89,13 +91,11 @@ def main():
         user_data = item.get("user", {})
         user_name = user_data.get("name", "E'lon egasi")
 
-        # Rasm
         photos = item.get("photos", [])
         photo_url = None
         if photos:
             photo_url = photos[0].get("link", "").replace("{width}", "1000").replace("{height}", "750")
 
-        # Telegram uchun xabar matni (OLX havolasisiz)
         caption = (
             f"🏠 <b>{title}</b>\n\n"
             f"💰 <b>Narxi:</b> {price}\n"
@@ -103,12 +103,15 @@ def main():
             f"📐 <b>Maydoni:</b> {area}\n"
             f"🏢 <b>Qavat:</b> {floor}\n"
             f"📍 <b>Manzil:</b> {location_str}\n"
-            f"👤 <b>Klient (E'lon egasi):</b> {user_name}"
+            f"👤 <b>E'lon egasi:</b> {user_name}"
         )
 
         send_telegram(caption, photo_url)
         save_seen_id(item_id)
-        print(f"Uy-joy e'loni joylandi: {title}")
+        sent_count += 1
+        print(f"Yangi e'lon yuborildi: {title}")
+
+    print(f"Jami yuborilgan yangi e'lonlar: {sent_count}")
 
 if __name__ == "__main__":
     main()
