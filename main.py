@@ -36,13 +36,13 @@ def main():
     seen_ids = load_seen_ids()
     
     with sync_playwright() as p:
-        # Cloudflare brauzer avtomatlashtirilganini payqamasligi uchun bayroqlar
         browser = p.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
             ]
         )
         context = browser.new_context(
@@ -51,19 +51,30 @@ def main():
             locale="ru-RU"
         )
         page = context.new_page()
-        
-        # Brauzer atributini oddiy foydalanuvchidek ko'rsatish
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        print("OLX sahifasi ochilmoqda...")
-        page.goto(OLX_URL, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(3000)
+        print("OLX sahifasiga kirilmoqda...")
+        page.goto(OLX_URL, wait_until="domcontentloaded", timeout=60000)
+        
+        # Sahifa sarlavhasini tekshirish (Cloudflare ushlab qolganini bilish uchun)
+        print(f"Sahifa sarlavhasi: {page.title()}")
+        
+        # Sahifa pastiga ozgina skroll qilish (e'lonlar yuklanishi uchun)
+        page.evaluate("window.scrollTo(0, 1000)")
+        page.wait_for_timeout(5000)
         
         html = page.content()
         browser.close()
 
     soup = BeautifulSoup(html, "html.parser")
+    
+    # Har xil turdagi OLX e'lon konteynerlarini qidirish
     cards = soup.find_all("div", {"data-cy": "l-card"})
+    if not cards:
+        cards = soup.find_all("div", {"data-testid": "l-card"})
+    if not cards:
+        cards = [a.parent for a in soup.find_all("a", href=True) if "/d/obyavlenie/" in a["href"]]
+
     print(f"Topilgan e'lonlar soni: {len(cards)}")
 
     for card in cards[:5]:
@@ -78,10 +89,10 @@ def main():
         if str(item_id) in seen_ids:
             continue
 
-        title_tag = card.find("h6") or card.find("h4")
+        title_tag = card.find("h6") or card.find("h4") or card.find("h3")
         title = title_tag.text.strip() if title_tag else "Yangi e'lon"
 
-        price_tag = card.find("p", {"data-testid": "ad-price"})
+        price_tag = card.find("p", {"data-testid": "ad-price"}) or card.find("p", {"data-cy": "ad-price"})
         price = price_tag.text.strip() if price_tag else "Ko'rsatilmagan"
 
         img_tag = card.find("img")
