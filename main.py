@@ -36,16 +36,28 @@ def main():
     seen_ids = load_seen_ids()
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Cloudflare brauzer avtomatlashtirilganini payqamasligi uchun bayroqlar
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 800}
+            viewport={'width': 1920, 'height': 1080},
+            locale="ru-RU"
         )
         page = context.new_page()
         
-        print("OLX sahifasi Chrome orqali ochilmoqda...")
-        page.goto(OLX_URL, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(5000)
+        # Brauzer atributini oddiy foydalanuvchidek ko'rsatish
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        print("OLX sahifasi ochilmoqda...")
+        page.goto(OLX_URL, wait_until="networkidle", timeout=60000)
+        page.wait_for_timeout(3000)
         
         html = page.content()
         browser.close()
