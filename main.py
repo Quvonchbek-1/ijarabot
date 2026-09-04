@@ -1,5 +1,5 @@
 import os
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
@@ -20,6 +20,7 @@ def save_seen_id(item_id):
 
 def send_telegram(title, price, link, photo_url=None):
     caption = f"🏠 <b>{title}</b>\n\n💰 <b>Narxi:</b> {price}\n\n🔗 <a href='{link}'>OLX-da ko'rish</a>"
+    
     if photo_url:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         payload = {"chat_id": CHANNEL_ID, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
@@ -27,19 +28,21 @@ def send_telegram(title, price, link, photo_url=None):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML"}
     
-    res = requests.post(url, json=payload)
+    res = requests.post(url, json=payload, impersonate="chrome120")
     print(f"Telegram javobi: {res.status_code}")
 
 def main():
     seen_ids = load_seen_ids()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "max-age=0"
-    }
     
-    res = requests.get(OLX_URL, headers=headers)
+    # Chrome 120 brauzerining TLS barmoq izini simulyatsiya qilish
+    res = requests.get(
+        OLX_URL,
+        impersonate="chrome120",
+        headers={
+            "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8,en;q=0.7",
+            "Referer": "https://www.olx.uz/",
+        }
+    )
     print(f"OLX Javob kodi: {res.status_code}")
     
     if res.status_code != 200:
