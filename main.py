@@ -7,7 +7,7 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
 API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
 SEEN_FILE = "seen_ids.txt"
-USD_RATE = 12800
+USD_RATE = 12800  # 1 USD uchun so'm kursi
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -27,7 +27,8 @@ def send_telegram(caption, photos):
             url = link.replace("{width}", "1000").replace("{height}", "750")
             valid_photos.append(url)
 
-    # 1. Rasmlar 2 va undan ko'p bo'lsa -> Albom yuborish
+    res = None
+    # 1. Albom ko'rinishida yuborish
     if len(valid_photos) >= 2:
         media = []
         for idx, photo_url in enumerate(valid_photos):
@@ -39,7 +40,7 @@ def send_telegram(caption, photos):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
         res = requests.post(url, json={"chat_id": CHANNEL_ID, "media": media})
 
-    # 2. Rasm faqat 1 ta bo'lsa -> Bitta rasm yuborish
+    # 2. Bitta rasm yuborish
     elif len(valid_photos) == 1:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
         res = requests.post(url, json={
@@ -49,7 +50,7 @@ def send_telegram(caption, photos):
             "parse_mode": "HTML"
         })
 
-    # 3. Rasm bo'lmasa -> Oddiy matn yuborish
+    # 3. Faqat matn yuborish
     else:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         res = requests.post(url, json={
@@ -58,7 +59,24 @@ def send_telegram(caption, photos):
             "parse_mode": "HTML"
         })
 
-    print(f"Telegram javobi: {res.status_code}")
+    # Post ostiga avtomatik comment yozish
+    if res and res.status_code == 200:
+        data = res.json()
+        result = data.get("result")
+        msg_id = None
+        
+        if isinstance(result, list) and len(result) > 0:
+            msg_id = result[0].get("message_id")
+        elif isinstance(result, dict):
+            msg_id = result.get("message_id")
+
+        if msg_id:
+            comment_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(comment_url, json={
+                "chat_id": CHANNEL_ID,
+                "text": "Bizdagi hamma e'lonlar yangi",
+                "reply_to_message_id": msg_id
+            })
 
 def main():
     seen_ids = load_seen_ids()
@@ -83,15 +101,13 @@ def main():
     for item in offers[:5]:
         item_id = str(item.get("id"))
         if item_id in seen_ids:
-            print(f"E'lon {item_id} bazada bor, o'tkazib yuborildi.")
             continue
 
         title = item.get("title", "Yangi e'lon")
-        link = item.get("url", "")
         
         params = item.get("params", [])
-        price_str = "Ko'rsatilmagan"
-        rooms = "Ko'rsatilmagan"
+        price_str = "Kelishilgan holda"
+        rooms = "2"
         area = "Ko'rsatilmagan"
         floor = "Ko'rsatilmagan"
 
@@ -106,9 +122,9 @@ def main():
                 if num:
                     if curr == "UZS":
                         usd_val = round(num / USD_RATE)
-                        price_str = f"${usd_val:,} ({num:,} so'm)"
+                        price_str = f"{usd_val}$"
                     elif curr == "USD":
-                        price_str = f"${num:,}"
+                        price_str = f"{num}$"
                     else:
                         price_str = f"{num} {curr}"
                 else:
@@ -125,25 +141,31 @@ def main():
         district_name = loc_data.get("district", {}).get("name", "")
         location_str = f"{city_name}, {district_name}".strip(", ")
 
-        user_data = item.get("user", {})
-        user_name = user_data.get("name", "E'lon egasi")
-
         photos = item.get("photos", [])
 
+        # Kengaytirilgan va chiroyli reklama matni
         caption = (
-            f"🏠 <b>{title}</b>\n\n"
-            f"💰 <b>Narxi:</b> {price_str}\n"
-            f"🚪 <b>Xonalar soni:</b> {rooms}\n"
-            f"📐 <b>Maydoni:</b> {area}\n"
-            f"🏢 <b>Qavat:</b> {floor}\n"
+            f"🏠 <b>{rooms} xonali kvartira</b> ({title})\n"
             f"📍 <b>Manzil:</b> {location_str}\n"
-            f"👤 <b>E'lon egasi:</b> {user_name}\n\n"
-            f"🔗 <a href='{link}'>E'lon va bog'lanish havolasi</a>"
+            f"🚇 <b>Jatshuv:</b> Metro va transportga juda yaqin\n\n"
+            f"📐 <b>Maydon:</b> {area}\n"
+            f"🏢 <b>Qavat:</b> {floor}\n"
+            f"🛋 <b>Mebellar:</b> To‘liq jihozlangan\n"
+            f"✨ <b>Ta'mir:</b> Yevro remont\n"
+            f"✅ <b>Barcha sharoitlar mavjud</b>\n\n"
+            f"👨‍👩‍👧 <b>Mos keladi:</b>\n"
+            f"• Oilaga\n"
+            f"• Talaba qizlarga\n"
+            f"• Ishchi yigitlarga\n\n"
+            f"💵 <b>Narx:</b> {price_str}\n\n"
+            f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
+            f"📩 <b>Murojaat uchun yozing :</b> @turayev_bek\n\n"
+            f"#{item_id}"
         )
 
         send_telegram(caption, photos)
         save_seen_id(item_id)
-        print(f"Yangi e'lon yuborildi: {title}")
+        print(f"Yangi e'lon yuborildi: #{item_id}")
 
 if __name__ == "__main__":
     main()
