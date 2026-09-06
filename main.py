@@ -7,7 +7,8 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
 API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
 SEEN_FILE = "seen_ids.txt"
-USD_RATE = 12800  # 1 USD uchun so'm kursi
+COUNTER_FILE = "counter.txt"
+USD_RATE = 12800
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -19,6 +20,19 @@ def save_seen_id(item_id):
     with open(SEEN_FILE, "a") as f:
         f.write(f"{item_id}\n")
 
+def get_next_counter():
+    if os.path.exists(COUNTER_FILE):
+        with open(COUNTER_FILE, "r") as f:
+            try:
+                return int(f.read().strip())
+            except ValueError:
+                return 1
+    return 1
+
+def save_counter(count):
+    with open(COUNTER_FILE, "w") as f:
+        f.write(str(count))
+
 def send_telegram(caption, photos):
     valid_photos = []
     for photo in photos[:10]:
@@ -27,8 +41,6 @@ def send_telegram(caption, photos):
             url = link.replace("{width}", "1000").replace("{height}", "750")
             valid_photos.append(url)
 
-    res = None
-    # 1. Albom ko'rinishida yuborish
     if len(valid_photos) >= 2:
         media = []
         for idx, photo_url in enumerate(valid_photos):
@@ -38,48 +50,28 @@ def send_telegram(caption, photos):
                 media.append({"type": "photo", "media": photo_url})
         
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
-        res = requests.post(url, json={"chat_id": CHANNEL_ID, "media": media})
+        requests.post(url, json={"chat_id": CHANNEL_ID, "media": media})
 
-    # 2. Bitta rasm yuborish
     elif len(valid_photos) == 1:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        res = requests.post(url, json={
+        requests.post(url, json={
             "chat_id": CHANNEL_ID,
             "photo": valid_photos[0],
             "caption": caption,
             "parse_mode": "HTML"
         })
 
-    # 3. Faqat matn yuborish
     else:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        res = requests.post(url, json={
+        requests.post(url, json={
             "chat_id": CHANNEL_ID,
             "text": caption,
             "parse_mode": "HTML"
         })
 
-    # Post ostiga avtomatik comment yozish
-    if res and res.status_code == 200:
-        data = res.json()
-        result = data.get("result")
-        msg_id = None
-        
-        if isinstance(result, list) and len(result) > 0:
-            msg_id = result[0].get("message_id")
-        elif isinstance(result, dict):
-            msg_id = result.get("message_id")
-
-        if msg_id:
-            comment_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(comment_url, json={
-                "chat_id": CHANNEL_ID,
-                "text": "Bizdagi hamma e'lonlar yangi",
-                "reply_to_message_id": msg_id
-            })
-
 def main():
     seen_ids = load_seen_ids()
+    post_number = get_next_counter()
     
     res = cffi_requests.get(
         API_URL,
@@ -114,7 +106,6 @@ def main():
         for p in params:
             key = p.get("key")
             val = p.get("value", {})
-            label = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
 
             if key == "price":
                 num = val.get("value") if isinstance(val, dict) else None
@@ -123,18 +114,21 @@ def main():
                     if curr == "UZS":
                         usd_val = round(num / USD_RATE)
                         price_str = f"{usd_val}$"
-                    elif curr == "USD":
-                        price_str = f"{num}$"
                     else:
-                        price_str = f"{num} {curr}"
+                        price_str = f"{num}$"
                 else:
-                    price_str = label
+                    label = val.get("label", "") if isinstance(val, dict) else ""
+                    clean_num = ''.join(filter(str.isdigit, str(label)))
+                    if clean_num:
+                        price_str = f"{clean_num}$"
+                    else:
+                        price_str = "Kelishilgan holda"
             elif key in ["number_of_rooms", "number_of_rooms_string"]:
-                rooms = label
+                rooms = val.get("label", "2") if isinstance(val, dict) else "2"
             elif key in ["total_area", "total_area_string"]:
-                area = label
+                area = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
             elif key == "floor":
-                floor = label
+                floor = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
 
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "Toshkent")
@@ -143,11 +137,10 @@ def main():
 
         photos = item.get("photos", [])
 
-        # Kengaytirilgan va chiroyli reklama matni
         caption = (
             f"🏠 <b>{rooms} xonali kvartira</b> ({title})\n"
             f"📍 <b>Manzil:</b> {location_str}\n"
-            f"🚇 <b>Jatshuv:</b> Metro va transportga juda yaqin\n\n"
+            f"🚇 <b>Joylashuvi:</b> Metro va transportga juda yaqin\n\n"
             f"📐 <b>Maydon:</b> {area}\n"
             f"🏢 <b>Qavat:</b> {floor}\n"
             f"🛋 <b>Mebellar:</b> To‘liq jihozlangan\n"
@@ -160,12 +153,14 @@ def main():
             f"💵 <b>Narx:</b> {price_str}\n\n"
             f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
             f"📩 <b>Murojaat uchun yozing :</b> @turayev_bek\n\n"
-            f"#{item_id}"
+            f"#{post_number}"
         )
 
         send_telegram(caption, photos)
         save_seen_id(item_id)
-        print(f"Yangi e'lon yuborildi: #{item_id}")
+        post_number += 1
+        save_counter(post_number)
+        print(f"Yangi e'lon yuborildi: #{post_number - 1}")
 
 if __name__ == "__main__":
     main()
