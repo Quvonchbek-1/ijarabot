@@ -12,25 +12,27 @@ USD_RATE = 12800
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
             return set(line.strip() for line in f if line.strip())
     return set()
 
 def save_seen_id(item_id):
-    with open(SEEN_FILE, "a") as f:
+    with open(SEEN_FILE, "a", encoding="utf-8") as f:
         f.write(f"{item_id}\n")
 
 def get_next_counter():
     if os.path.exists(COUNTER_FILE):
-        with open(COUNTER_FILE, "r") as f:
+        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
             try:
-                return int(f.read().strip())
+                content = f.read().strip()
+                if content:
+                    return int(content)
             except ValueError:
-                return 1
+                pass
     return 1
 
 def save_counter(count):
-    with open(COUNTER_FILE, "w") as f:
+    with open(COUNTER_FILE, "w", encoding="utf-8") as f:
         f.write(str(count))
 
 def send_telegram(caption, photos):
@@ -41,50 +43,60 @@ def send_telegram(caption, photos):
             url = link.replace("{width}", "1000").replace("{height}", "750")
             valid_photos.append(url)
 
-    if len(valid_photos) >= 2:
-        media = []
-        for idx, photo_url in enumerate(valid_photos):
-            if idx == 0:
-                media.append({"type": "photo", "media": photo_url, "caption": caption, "parse_mode": "HTML"})
-            else:
-                media.append({"type": "photo", "media": photo_url})
-        
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
-        requests.post(url, json={"chat_id": CHANNEL_ID, "media": media})
+    try:
+        if len(valid_photos) >= 2:
+            media = []
+            for idx, photo_url in enumerate(valid_photos):
+                if idx == 0:
+                    media.append({"type": "photo", "media": photo_url, "caption": caption, "parse_mode": "HTML"})
+                else:
+                    media.append({"type": "photo", "media": photo_url})
+            
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
+            res = requests.post(url, json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
 
-    elif len(valid_photos) == 1:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        requests.post(url, json={
-            "chat_id": CHANNEL_ID,
-            "photo": valid_photos[0],
-            "caption": caption,
-            "parse_mode": "HTML"
-        })
+        elif len(valid_photos) == 1:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            res = requests.post(url, json={
+                "chat_id": CHANNEL_ID,
+                "photo": valid_photos[0],
+                "caption": caption,
+                "parse_mode": "HTML"
+            }, timeout=15)
 
-    else:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": CHANNEL_ID,
-            "text": caption,
-            "parse_mode": "HTML"
-        })
+        else:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            res = requests.post(url, json={
+                "chat_id": CHANNEL_ID,
+                "text": caption,
+                "parse_mode": "HTML"
+            }, timeout=15)
+
+        print(f"Telegram javob kodi: {res.status_code}")
+    except Exception as e:
+        print(f"Telegramga yuborishda xatolik: {e}")
 
 def main():
     seen_ids = load_seen_ids()
     post_number = get_next_counter()
     
-    res = cffi_requests.get(
-        API_URL,
-        impersonate="chrome120",
-        headers={
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8",
-            "Referer": "https://www.olx.uz/"
-        }
-    )
-    
+    try:
+        res = cffi_requests.get(
+            API_URL,
+            impersonate="chrome120",
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8",
+                "Referer": "https://www.olx.uz/"
+            },
+            timeout=15
+        )
+    except Exception as e:
+        print(f"OLX ga ulanishda xato: {e}")
+        return
+
     if res.status_code != 200:
-        print("API ga ulanib bo'lmadi")
+        print(f"API xatosi, status: {res.status_code}")
         return
 
     data = res.json()
@@ -96,8 +108,8 @@ def main():
             continue
 
         title = item.get("title", "Yangi e'lon")
-        
         params = item.get("params", [])
+        
         price_str = "Kelishilgan holda"
         rooms = "2"
         area = "Ko'rsatilmagan"
