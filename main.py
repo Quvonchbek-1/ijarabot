@@ -35,6 +35,30 @@ def save_counter(count):
     with open(COUNTER_FILE, "w", encoding="utf-8") as f:
         f.write(str(count))
 
+def get_phone_number(item_id):
+    """OLX API-dan e'lon egasining telefon raqamini olish"""
+    try:
+        phone_url = f"https://www.olx.uz/api/v1/offers/{item_id}/phones/"
+        res = cffi_requests.get(
+            phone_url,
+            impersonate="chrome120",
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8",
+                "Referer": "https://www.olx.uz/"
+            },
+            timeout=10
+        )
+        if res.status_code == 200:
+            data = res.json()
+            # OLX raqamlarni "phones" ro'yxatida qaytaradi
+            phones = data.get("data", {}).get("phones", [])
+            if phones:
+                return ", ".join(phones)
+    except Exception as e:
+        print(f"Raqam olishda xatolik #{item_id}: {e}")
+    return "Ko'rsatilmagan"
+
 def send_telegram(caption, photos):
     valid_photos = []
     for photo in photos[:10]:
@@ -53,11 +77,11 @@ def send_telegram(caption, photos):
                     media.append({"type": "photo", "media": photo_url})
             
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
-            res = requests.post(url, json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
+            requests.post(url, json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
 
         elif len(valid_photos) == 1:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            res = requests.post(url, json={
+            requests.post(url, json={
                 "chat_id": CHANNEL_ID,
                 "photo": valid_photos[0],
                 "caption": caption,
@@ -66,13 +90,11 @@ def send_telegram(caption, photos):
 
         else:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            res = requests.post(url, json={
+            requests.post(url, json={
                 "chat_id": CHANNEL_ID,
                 "text": caption,
                 "parse_mode": "HTML"
             }, timeout=15)
-
-        print(f"Telegram javob kodi: {res.status_code}")
     except Exception as e:
         print(f"Telegramga yuborishda xatolik: {e}")
 
@@ -147,6 +169,12 @@ def main():
         district_name = loc_data.get("district", {}).get("name", "")
         location_str = f"{city_name}, {district_name}".strip(", ")
 
+        user_data = item.get("user", {})
+        user_name = user_data.get("name", "E'lon egasi")
+
+        # Telefon raqamini alohida so'rov orqali olish
+        phone_number = get_phone_number(item_id)
+
         photos = item.get("photos", [])
 
         caption = (
@@ -162,7 +190,9 @@ def main():
             f"• Oilaga\n"
             f"• Talaba qizlarga\n"
             f"• Ishchi yigitlarga\n\n"
-            f"💵 <b>Narx:</b> {price_str}\n\n"
+            f"💵 <b>Narx:</b> {price_str}\n"
+            f"📞 <b>Tel:</b> {phone_number}\n"
+            f"👤 <b>E'lon egasi:</b> {user_name}\n\n"
             f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
             f"📩 <b>Murojaat uchun yozing :</b> @turayev_bek\n\n"
             f"#{post_number}"
