@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from curl_cffi import requests as cffi_requests
 
@@ -9,6 +10,8 @@ API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 USD_RATE = 12800
+
+INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -36,7 +39,7 @@ def save_counter(count):
         f.write(str(count))
 
 def get_phone_number(item_id):
-    """OLX API-dan e'lon egasining telefon raqamini olish"""
+    """OLX API-dan telefon raqamini olib, Telegram uchun bosiladigan link shakliga keltirish"""
     try:
         phone_url = f"https://www.olx.uz/api/v1/offers/{item_id}/phones/"
         res = cffi_requests.get(
@@ -51,10 +54,18 @@ def get_phone_number(item_id):
         )
         if res.status_code == 200:
             data = res.json()
-            # OLX raqamlarni "phones" ro'yxatida qaytaradi
             phones = data.get("data", {}).get("phones", [])
             if phones:
-                return ", ".join(phones)
+                phone = phones[0]
+                # Faqat raqamlar va '+' belgisini qoldiramiz
+                clean_phone = re.sub(r'[^\d+]', '', phone)
+                if not clean_phone.startswith('+') and clean_phone.startswith('998'):
+                    clean_phone = '+' + clean_phone
+                elif not clean_phone.startswith('+'):
+                    clean_phone = '+998' + clean_phone
+                
+                # Bosilganda tel qilish oynasiga o'tadigan HTML havola
+                return f'<a href="tel:{clean_phone}">{clean_phone}</a>'
     except Exception as e:
         print(f"Raqam olishda xatolik #{item_id}: {e}")
     return "Ko'rsatilmagan"
@@ -172,11 +183,12 @@ def main():
         user_data = item.get("user", {})
         user_name = user_data.get("name", "E'lon egasi")
 
-        # Telefon raqamini alohida so'rov orqali olish
+        # Telefon raqamini olish va link shakliga keltirish
         phone_number = get_phone_number(item_id)
 
         photos = item.get("photos", [])
 
+        # Post matni
         caption = (
             f"🏠 <b>{rooms} xonali kvartira</b> ({title})\n"
             f"📍 <b>Manzil:</b> {location_str}\n"
@@ -194,15 +206,16 @@ def main():
             f"📞 <b>Tel:</b> {phone_number}\n"
             f"👤 <b>E'lon egasi:</b> {user_name}\n\n"
             f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
-            f"📩 <b>Murojaat uchun yozing :</b> @turayev_bek\n\n"
-            f"#{post_number}"
+            f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>\n"
+            f"📩 <b>TELEGRAM:</b> @turayev_bek\n\n"
+            f"#id_{post_number}"
         )
 
         send_telegram(caption, photos)
         save_seen_id(item_id)
         post_number += 1
         save_counter(post_number)
-        print(f"Yangi e'lon yuborildi: #{post_number - 1}")
+        print(f"Yangi e'lon yuborildi: #id_{post_number - 1}")
 
 if __name__ == "__main__":
     main()
