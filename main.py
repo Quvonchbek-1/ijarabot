@@ -6,7 +6,8 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=10&query=ijara"
+# Toshkent shahri ijaraga kvartiralar API adresi
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=25&query=ijara"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 USD_RATE = 12800
@@ -39,7 +40,6 @@ def save_counter(count):
         f.write(str(count))
 
 def get_phone_number(item_id):
-    """OLX API-dan telefon raqamini olib, Telegram uchun bosiladigan link shakliga keltirish"""
     try:
         phone_url = f"https://www.olx.uz/api/v1/offers/{item_id}/phones/"
         res = cffi_requests.get(
@@ -57,18 +57,32 @@ def get_phone_number(item_id):
             phones = data.get("data", {}).get("phones", [])
             if phones:
                 phone = phones[0]
-                # Faqat raqamlar va '+' belgisini qoldiramiz
                 clean_phone = re.sub(r'[^\d+]', '', phone)
                 if not clean_phone.startswith('+') and clean_phone.startswith('998'):
                     clean_phone = '+' + clean_phone
                 elif not clean_phone.startswith('+'):
                     clean_phone = '+998' + clean_phone
                 
-                # Bosilganda tel qilish oynasiga o'tadigan HTML havola
                 return f'<a href="tel:{clean_phone}">{clean_phone}</a>'
     except Exception as e:
         print(f"Raqam olishda xatolik #{item_id}: {e}")
     return "Ko'rsatilmagan"
+
+def parse_target_audience(text):
+    """OLX tavsifidan kimga mos kelishini aniqlash"""
+    text_lower = text.lower()
+    targets = []
+
+    if any(w in text_lower for w in ["oila", "oilaga", "семь"]):
+        targets.append("• Oilaga")
+    if any(w in text_lower for w in ["qiz", "qizlar", "qizlarga", "девуш"]):
+        targets.append("• Talaba / ishchi qizlarga")
+    if any(w in text_lower for w in ["yigit", "yigitlar", "yigitlarga", "парне"]):
+        targets.append("• Ishchi / talaba yigitlarga")
+
+    if targets:
+        return "\n".join(targets)
+    return "• Hammaga"
 
 def send_telegram(caption, photos):
     valid_photos = []
@@ -135,14 +149,23 @@ def main():
     data = res.json()
     offers = data.get("data", [])
 
-    for item in offers[:5]:
+    for item in offers:
         item_id = str(item.get("id"))
         if item_id in seen_ids:
             continue
 
+        # 1. Joylashuvni tekshirish (Faqat Toshkent shahri)
+        loc_data = item.get("location", {})
+        city_name = loc_data.get("city", {}).get("name", "")
+        if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
+            continue
+
         title = item.get("title", "Yangi e'lon")
+        description = item.get("description", "")
         params = item.get("params", [])
         
+        # 2. Narxni hisoblash va $350 - $1300 oralig'ida filterlash
+        usd_price = None
         price_str = "Kelishilgan holda"
         rooms = "2"
         area = "Ko'rsatilmagan"
@@ -157,17 +180,19 @@ def main():
                 curr = val.get("currency") if isinstance(val, dict) else None
                 if num:
                     if curr == "UZS":
-                        usd_val = round(num / USD_RATE)
-                        price_str = f"{usd_val}$"
-                    else:
-                        price_str = f"{num}$"
+                        usd_price = round(num / USD_RATE)
+                    elif curr == "USD":
+                        usd_price = int(num)
                 else:
                     label = val.get("label", "") if isinstance(val, dict) else ""
                     clean_num = ''.join(filter(str.isdigit, str(label)))
                     if clean_num:
-                        price_str = f"{clean_num}$"
-                    else:
-                        price_str = "Kelishilgan holda"
+                        val_num = int(clean_num)
+                        if "so'm" in label.lower() or "som" in label.lower() or "сум" in label.lower():
+                            usd_price = round(val_num / USD_RATE)
+                        else:
+                            usd_price = val_num
+
             elif key in ["number_of_rooms", "number_of_rooms_string"]:
                 rooms = val.get("label", "2") if isinstance(val, dict) else "2"
             elif key in ["total_area", "total_area_string"]:
@@ -175,33 +200,35 @@ def main():
             elif key == "floor":
                 floor = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
 
-        loc_data = item.get("location", {})
-        city_name = loc_data.get("city", {}).get("name", "Toshkent")
+        # Narx 350$ va 1300$ oralig'ida bo'lmasa o'tkazib yuboriladi
+        if not usd_price or not (350 <= usd_price <= 1300):
+            continue
+
+        price_str = f"{usd_price}$"
         district_name = loc_data.get("district", {}).get("name", "")
         location_str = f"{city_name}, {district_name}".strip(", ")
 
         user_data = item.get("user", {})
         user_name = user_data.get("name", "E'lon egasi")
 
-        # Telefon raqamini olish va link shakliga keltirish
-        phone_number = get_phone_number(item_id)
+        # Kimga mos kelishini aniqlash
+        mos_keladi_str = parse_target_audience(f"{title} {description}")
 
+        # Telefon raqami
+        phone_number = get_phone_number(item_id)
         photos = item.get("photos", [])
 
-        # Post matni
+        # Telegram posti
         caption = (
             f"🏠 <b>{rooms} xonali kvartira</b> ({title})\n"
-            f"📍 <b>Manzil:</b> {location_str}\n"
-            f"🚇 <b>Joylashuvi:</b> Metro va transportga juda yaqin\n\n"
+            f"📍 <b>Manzil:</b> {location_str}\n\n"
             f"📐 <b>Maydon:</b> {area}\n"
             f"🏢 <b>Qavat:</b> {floor}\n"
             f"🛋 <b>Mebellar:</b> To‘liq jihozlangan\n"
             f"✨ <b>Ta'mir:</b> Yevro remont\n"
             f"✅ <b>Barcha sharoitlar mavjud</b>\n\n"
             f"👨‍👩‍👧 <b>Mos keladi:</b>\n"
-            f"• Oilaga\n"
-            f"• Talaba qizlarga\n"
-            f"• Ishchi yigitlarga\n\n"
+            f"{mos_keladi_str}\n\n"
             f"💵 <b>Narx:</b> {price_str}\n"
             f"📞 <b>Tel:</b> {phone_number}\n"
             f"👤 <b>E'lon egasi:</b> {user_name}\n\n"
