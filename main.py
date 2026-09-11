@@ -6,13 +6,25 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Toshkentdagi kvartira ijarasi bo'yicha aniq so'rov
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira+toshkent"
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira+toshkent&filter_float_price%3Afrom=350&filter_float_price%3Ato=1300"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
-USD_RATE = 12800
 
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
+
+def get_usd_rate():
+    """Markaziy Bank API'sidan real vaqtdagi dollar kursini olish"""
+    try:
+        res = requests.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data and "Rate" in data[0]:
+                return float(data[0]["Rate"])
+    except Exception as e:
+        print(f"Valyuta kursini olishda xatolik: {e}")
+    return 11850.0  # Zaxira kurs
+
+USD_RATE = get_usd_rate()
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -84,8 +96,6 @@ def parse_target_audience(text):
     return "• Hammaga"
 
 def extract_price_in_usd(item):
-    """E'londan narxni olib, USD valyutasiga o'giradi"""
-    # 1. To'g'ridan-to'g'ri 'price' obyektidan izlash
     price_obj = item.get("price", {})
     if isinstance(price_obj, dict):
         value = price_obj.get("value")
@@ -96,7 +106,6 @@ def extract_price_in_usd(item):
             elif currency in ["USD", "$"]:
                 return int(value)
 
-    # 2. Parametrlar ichidan izlash
     params = item.get("params", [])
     for p in params:
         if p.get("key") == "price":
@@ -109,14 +118,17 @@ def extract_price_in_usd(item):
                         return round(num / USD_RATE)
                     elif curr in ["USD", "$"]:
                         return int(num)
-                label = val.get("label", "")
-                clean_num = ''.join(filter(str.isdigit, str(label)))
+                
+                label = str(val.get("label", "")).lower()
+                clean_num = ''.join(filter(str.isdigit, label))
                 if clean_num:
                     val_num = int(clean_num)
-                    if "so'm" in label.lower() or "som" in label.lower() or "сум" in label.lower():
+                    if "$" in label or "y.e" in label or "у.е" in label or "usd" in label:
+                        return val_num
+                    elif val_num > 5000:
                         return round(val_num / USD_RATE)
-                    return val_num
-
+                    else:
+                        return val_num
     return None
 
 def send_telegram(caption, photos):
@@ -161,6 +173,7 @@ def send_telegram(caption, photos):
 def main():
     seen_ids = load_seen_ids()
     post_number = get_next_counter()
+    print(f"Ishlatilayotgan USD kursi: {USD_RATE} UZS")
     
     try:
         res = cffi_requests.get(
@@ -189,22 +202,18 @@ def main():
     for item in offers:
         item_id = str(item.get("id"))
         
-        # 1. Avval ko'rilganmi?
         if item_id in seen_ids:
             continue
 
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "")
         
-        # 2. Joylashuv tekshiruvi (Toshkent)
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
-            print(f"O'tkazildi (Toshkent emas): ID {item_id} -> {city_name}")
             continue
 
-        # 3. Narx tekshiruvi ($350 - $1300)
         usd_price = extract_price_in_usd(item)
         if not usd_price or not (350 <= usd_price <= 1300):
-            print(f"O'tkazildi (Narx to'g'ri kelmadi): ID {item_id} -> {usd_price}$")
+            print(f"O'tkazildi (Narx: {usd_price}$ mos kelmadi): ID {item_id}")
             continue
 
         title = item.get("title", "Yangi e'lon")
