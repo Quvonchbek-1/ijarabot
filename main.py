@@ -6,8 +6,8 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Toshkent shahri bo'yicha e'lonlar sonini 50 taga oshiramiz
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara"
+# Toshkentdagi kvartira ijarasi bo'yicha aniq so'rov
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira+toshkent"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 USD_RATE = 12800
@@ -83,6 +83,42 @@ def parse_target_audience(text):
         return "\n".join(targets)
     return "• Hammaga"
 
+def extract_price_in_usd(item):
+    """E'londan narxni olib, USD valyutasiga o'giradi"""
+    # 1. To'g'ridan-to'g'ri 'price' obyektidan izlash
+    price_obj = item.get("price", {})
+    if isinstance(price_obj, dict):
+        value = price_obj.get("value")
+        currency = price_obj.get("currency")
+        if value:
+            if currency == "UZS":
+                return round(value / USD_RATE)
+            elif currency in ["USD", "$"]:
+                return int(value)
+
+    # 2. Parametrlar ichidan izlash
+    params = item.get("params", [])
+    for p in params:
+        if p.get("key") == "price":
+            val = p.get("value", {})
+            if isinstance(val, dict):
+                num = val.get("value")
+                curr = val.get("currency")
+                if num:
+                    if curr == "UZS":
+                        return round(num / USD_RATE)
+                    elif curr in ["USD", "$"]:
+                        return int(num)
+                label = val.get("label", "")
+                clean_num = ''.join(filter(str.isdigit, str(label)))
+                if clean_num:
+                    val_num = int(clean_num)
+                    if "so'm" in label.lower() or "som" in label.lower() or "сум" in label.lower():
+                        return round(val_num / USD_RATE)
+                    return val_num
+
+    return None
+
 def send_telegram(caption, photos):
     valid_photos = []
     for photo in photos[:10]:
@@ -152,21 +188,29 @@ def main():
     sent_count = 0
     for item in offers:
         item_id = str(item.get("id"))
+        
+        # 1. Avval ko'rilganmi?
         if item_id in seen_ids:
             continue
 
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "")
         
-        # Faqat Toshkent
+        # 2. Joylashuv tekshiruvi (Toshkent)
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
+            print(f"O'tkazildi (Toshkent emas): ID {item_id} -> {city_name}")
+            continue
+
+        # 3. Narx tekshiruvi ($350 - $1300)
+        usd_price = extract_price_in_usd(item)
+        if not usd_price or not (350 <= usd_price <= 1300):
+            print(f"O'tkazildi (Narx to'g'ri kelmadi): ID {item_id} -> {usd_price}$")
             continue
 
         title = item.get("title", "Yangi e'lon")
         description = item.get("description", "")
         params = item.get("params", [])
         
-        usd_price = None
         rooms = "2"
         area = "Ko'rsatilmagan"
         floor = "Ko'rsatilmagan"
@@ -174,35 +218,12 @@ def main():
         for p in params:
             key = p.get("key")
             val = p.get("value", {})
-
-            if key == "price":
-                num = val.get("value") if isinstance(val, dict) else None
-                curr = val.get("currency") if isinstance(val, dict) else None
-                if num:
-                    if curr == "UZS":
-                        usd_price = round(num / USD_RATE)
-                    elif curr in ["USD", "$"]:
-                        usd_price = int(num)
-                else:
-                    label = val.get("label", "") if isinstance(val, dict) else ""
-                    clean_num = ''.join(filter(str.isdigit, str(label)))
-                    if clean_num:
-                        val_num = int(clean_num)
-                        if "so'm" in label.lower() or "som" in label.lower() or "сум" in label.lower():
-                            usd_price = round(val_num / USD_RATE)
-                        else:
-                            usd_price = val_num
-
-            elif key in ["number_of_rooms", "number_of_rooms_string"]:
+            if key in ["number_of_rooms", "number_of_rooms_string"]:
                 rooms = val.get("label", "2") if isinstance(val, dict) else "2"
             elif key in ["total_area", "total_area_string"]:
                 area = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
             elif key == "floor":
                 floor = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
-
-        # Narx oralig'ini tekshirish
-        if not usd_price or not (350 <= usd_price <= 1300):
-            continue
 
         price_str = f"{usd_price}$"
         district_name = loc_data.get("district", {}).get("name", "")
@@ -241,7 +262,6 @@ def main():
         sent_count += 1
         print(f"Yangi e'lon yuborildi: #id_{post_number - 1}")
 
-        # Har bir ishlaganda ko'p spamlama maslik uchun maksimum 5 ta yangi e'lon yuboradi
         if sent_count >= 5:
             break
 
