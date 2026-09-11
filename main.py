@@ -6,8 +6,8 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Toshkent shahri ijaraga kvartiralar API adresi
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=25&query=ijara"
+# Toshkent shahri bo'yicha e'lonlar sonini 50 taga oshiramiz
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 USD_RATE = 12800
@@ -69,7 +69,6 @@ def get_phone_number(item_id):
     return "Ko'rsatilmagan"
 
 def parse_target_audience(text):
-    """OLX tavsifidan kimga mos kelishini aniqlash"""
     text_lower = text.lower()
     targets = []
 
@@ -148,15 +147,18 @@ def main():
 
     data = res.json()
     offers = data.get("data", [])
+    print(f"OLX'dan jami {len(offers)} ta e'lon olindi.")
 
+    sent_count = 0
     for item in offers:
         item_id = str(item.get("id"))
         if item_id in seen_ids:
             continue
 
-        # 1. Joylashuvni tekshirish (Faqat Toshkent shahri)
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "")
+        
+        # Faqat Toshkent
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
             continue
 
@@ -164,9 +166,7 @@ def main():
         description = item.get("description", "")
         params = item.get("params", [])
         
-        # 2. Narxni hisoblash va $350 - $1300 oralig'ida filterlash
         usd_price = None
-        price_str = "Kelishilgan holda"
         rooms = "2"
         area = "Ko'rsatilmagan"
         floor = "Ko'rsatilmagan"
@@ -181,7 +181,7 @@ def main():
                 if num:
                     if curr == "UZS":
                         usd_price = round(num / USD_RATE)
-                    elif curr == "USD":
+                    elif curr in ["USD", "$"]:
                         usd_price = int(num)
                 else:
                     label = val.get("label", "") if isinstance(val, dict) else ""
@@ -200,7 +200,7 @@ def main():
             elif key == "floor":
                 floor = val.get("label", "Ko'rsatilmagan") if isinstance(val, dict) else "Ko'rsatilmagan"
 
-        # Narx 350$ va 1300$ oralig'ida bo'lmasa o'tkazib yuboriladi
+        # Narx oralig'ini tekshirish
         if not usd_price or not (350 <= usd_price <= 1300):
             continue
 
@@ -211,14 +211,10 @@ def main():
         user_data = item.get("user", {})
         user_name = user_data.get("name", "E'lon egasi")
 
-        # Kimga mos kelishini aniqlash
         mos_keladi_str = parse_target_audience(f"{title} {description}")
-
-        # Telefon raqami
         phone_number = get_phone_number(item_id)
         photos = item.get("photos", [])
 
-        # Telegram posti
         caption = (
             f"🏠 <b>{rooms} xonali kvartira</b> ({title})\n"
             f"📍 <b>Manzil:</b> {location_str}\n\n"
@@ -242,7 +238,15 @@ def main():
         save_seen_id(item_id)
         post_number += 1
         save_counter(post_number)
+        sent_count += 1
         print(f"Yangi e'lon yuborildi: #id_{post_number - 1}")
+
+        # Har bir ishlaganda ko'p spamlama maslik uchun maksimum 5 ta yangi e'lon yuboradi
+        if sent_count >= 5:
+            break
+
+    if sent_count == 0:
+        print("Yangi mos keladigan e'lonlar topilmadi.")
 
 if __name__ == "__main__":
     main()
