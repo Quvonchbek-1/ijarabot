@@ -6,23 +6,26 @@ from curl_cffi import requests as cffi_requests
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira+toshkent&filter_float_price%3Afrom=350&filter_float_price%3Ato=1300"
+# API so'rovi toza va barqaror formatda (OLX dagi barcha kvartira ijaralarini oladi)
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
 
 def get_usd_rate():
-    """Markaziy Bank API'sidan real vaqtdagi dollar kursini olish"""
+    """Markaziy Bankdan jonli dollar kursini olish"""
     try:
         res = requests.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5)
         if res.status_code == 200:
             data = res.json()
             if data and "Rate" in data[0]:
-                return float(data[0]["Rate"])
+                rate = float(data[0]["Rate"])
+                print(f"MB Real USD kursi: {rate} UZS")
+                return rate
     except Exception as e:
-        print(f"Valyuta kursini olishda xatolik: {e}")
-    return 11850.0  # Zaxira kurs
+        print(f"Kurs olishda xato, standart ishlatiladi: {e}")
+    return 12800.0
 
 USD_RATE = get_usd_rate()
 
@@ -96,6 +99,7 @@ def parse_target_audience(text):
     return "• Hammaga"
 
 def extract_price_in_usd(item):
+    """E'lon narxini tahlil qilish va to'g'ri USD ga o'girish"""
     price_obj = item.get("price", {})
     if isinstance(price_obj, dict):
         value = price_obj.get("value")
@@ -173,7 +177,6 @@ def send_telegram(caption, photos):
 def main():
     seen_ids = load_seen_ids()
     post_number = get_next_counter()
-    print(f"Ishlatilayotgan USD kursi: {USD_RATE} UZS")
     
     try:
         res = cffi_requests.get(
@@ -208,12 +211,15 @@ def main():
         loc_data = item.get("location", {})
         city_name = loc_data.get("city", {}).get("name", "")
         
+        # Faqat Toshkent
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
             continue
 
         usd_price = extract_price_in_usd(item)
+        
+        # Narxni $350 - $1300 oralig'ida qat'iy tekshirish
         if not usd_price or not (350 <= usd_price <= 1300):
-            print(f"O'tkazildi (Narx: {usd_price}$ mos kelmadi): ID {item_id}")
+            print(f"O'tkazildi (Narx: {usd_price}$ to'g'ri kelmadi): ID {item_id}")
             continue
 
         title = item.get("title", "Yangi e'lon")
@@ -269,7 +275,7 @@ def main():
         post_number += 1
         save_counter(post_number)
         sent_count += 1
-        print(f"Yangi e'lon yuborildi: #id_{post_number - 1}")
+        print(f"Muvaffaqiyatli yuborildi: #{item_id} | Narxi: {usd_price}$ | ID: #id_{post_number - 1}")
 
         if sent_count >= 5:
             break
