@@ -1,10 +1,8 @@
 import os
 import re
-import sys
 import requests
 from curl_cffi import requests as cffi_requests
 
-# Baza bilan ishlash funksiyalarini xavfsiz yuklash
 try:
     from database import init_db, save_offer
 except ImportError:
@@ -21,15 +19,12 @@ COUNTER_FILE = "counter.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
 
 def get_usd_rate():
-    """Markaziy Bank API'dan dollar kursini olish"""
     try:
         res = requests.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=10)
         if res.status_code == 200:
-            rate = float(res.json()[0]["Rate"])
-            print(f"💰 Joriy dollar kursi: 1 USD = {rate} UZS")
-            return rate
+            return float(res.json()[0]["Rate"])
     except Exception as e:
-        print(f"⚠️ Valyuta kursini olishda xatolik (standart 12800 UZS ishlatiladi): {e}")
+        print(f"Valyuta kursi xatosi: {e}")
     return 12800.0
 
 USD_RATE = get_usd_rate()
@@ -48,7 +43,7 @@ def save_seen_id(item_id):
         with open(SEEN_FILE, "a", encoding="utf-8") as f:
             f.write(f"{item_id}\n")
     except Exception as e:
-        print(f"Xato (seen_ids saqlash): {e}")
+        print(f"Xato (seen_ids): {e}")
 
 def get_next_counter():
     if os.path.exists(COUNTER_FILE):
@@ -66,7 +61,7 @@ def save_counter(count):
         with open(COUNTER_FILE, "w", encoding="utf-8") as f:
             f.write(str(count))
     except Exception as e:
-        print(f"Xato (counter saqlash): {e}")
+        print(f"Xato (counter): {e}")
 
 def get_phone_number(item_id):
     try:
@@ -82,7 +77,7 @@ def get_phone_number(item_id):
                     clean_phone = '+998' + clean_phone
                 return clean_phone
     except Exception as e:
-        print(f"Tel raqam olishda xato (ID: {item_id}): {e}")
+        print(f"Tel raqam xatosi (ID: {item_id}): {e}")
     return "Ko'rsatilmagan"
 
 def extract_price_in_usd(item):
@@ -95,11 +90,11 @@ def extract_price_in_usd(item):
                 return round(val / USD_RATE)
             else:
                 return int(val)
-    return None
+    return 0
 
 def send_telegram_teaser(caption, photos, item_id):
     if not BOT_TOKEN or not CHANNEL_ID:
-        print("❌ XATOLIK: BOT_TOKEN yoki CHANNEL_ID GitHub Secrets'da topilmadi!")
+        print("❌ BOT_TOKEN yoki CHANNEL_ID yo'q!")
         return False
 
     valid_photos = []
@@ -146,46 +141,48 @@ def send_telegram_teaser(caption, photos, item_id):
             }, timeout=15)
             return r.status_code == 200
     except Exception as e:
-        print(f"Telegram API yuborishda xatolik: {e}")
+        print(f"Telegram yuborishda xatolik: {e}")
         return False
 
 def main():
     print("🚀 SCRAPER ISHGA TUSHDI")
-    
     try:
         init_db()
     except Exception as e:
-        print(f"Baza yuklanishida ogohlantirish: {e}")
+        print(f"Baza xatosi: {e}")
 
     seen_ids = load_seen_ids()
     post_number = get_next_counter()
 
-    print(f"📊 Ilgari ko'rilgan e'lonlar soni: {len(seen_ids)}")
-    print("🌐 OLX API'ga so'rov yuborilmoqda...")
+    print(f"📊 Bazada mavjud IDlar: {len(seen_ids)} ta")
+    print("🌐 OLX API'dan e'lonlar olinmoqda...")
 
     try:
         res = cffi_requests.get(API_URL, impersonate="chrome120", timeout=20)
         if res.status_code != 200:
-            print(f"❌ OLX serveri xato javob berdi: HTTP {res.status_code}")
+            print(f"❌ OLX HTTP xatolik: {res.status_code}")
             return
-
-        data = res.json()
-        offers = data.get("data", [])
+        offers = res.json().get("data", [])
         print(f"📦 OLX'dan kelgan jami e'lonlar: {len(offers)} ta")
     except Exception as e:
-        print(f"❌ OLX so'rovida xatolik: {e}")
+        print(f"❌ OLX so'rov xatosi: {e}")
         return
 
     sent_count = 0
     for item in offers:
         item_id = str(item.get("id", ""))
-        if not item_id or item_id in seen_ids:
+        
+        if not item_id:
+            continue
+
+        if item_id in seen_ids:
+            print(f"⏭ O'tib yuborildi (Bazada bor): {item_id}")
             continue
 
         title = item.get("title", "")
         title_lower = title.lower()
 
-        # 1. Shahar filtri (Toshkent / Ташкент)
+        # 1. Shahar tekshiruvi (Toshkent / Ташкент)
         city_name = ""
         location_data = item.get("location", {})
         if isinstance(location_data, dict):
@@ -194,18 +191,17 @@ def main():
                 city_name = city_obj.get("name", "")
 
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
+            print(f"⏭ O'tib yuborildi (Toshkent emas): {title[:30]}")
             continue
 
-        # 2. Kunlik/Sutkalik ijara e'lonlarini tashlab yuborish
+        # 2. Sutkalik e'lonlarni chiqarib tashlash
         if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik", "посуточно"]):
+            print(f"⏭ O'tib yuborildi (Sutkalik): {title[:30]}")
             continue
 
-        # 3. Narx filtri ($350 - $1300 USD)
+        # Narx olinadi (cheklov mutlaqo olib tashlandi)
         usd_price = extract_price_in_usd(item)
-        if not usd_price or not (350 <= usd_price <= 1300):
-            continue
 
-        # Tuman va manzil
         district_name = ""
         if isinstance(location_data, dict):
             dist_obj = location_data.get("district", {})
@@ -220,11 +216,12 @@ def main():
         except Exception as e:
             print(f"Baza saqlash: {e}")
 
+        price_display = f"{usd_price}$" if usd_price > 0 else "Kelishilgan holda"
         masked_phone = "+998 90 *** ** **"
         caption = (
             f"🏠 <b>{title}</b>\n"
             f"📍 <b>Manzil:</b> {location_str}\n\n"
-            f"💵 <b>Narx:</b> {usd_price}$\n"
+            f"💵 <b>Narx:</b> {price_display}\n"
             f"📞 <b>Tel:</b> {masked_phone}\n\n"
             f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>\n\n"
             f"#id_{post_number}"
@@ -232,18 +229,18 @@ def main():
 
         success = send_telegram_teaser(caption, item.get("photos", []), item_id)
         if success:
-            print(f"✅ KANALGA YUBORILDI: #{post_number} - {title[:35]}... ({usd_price}$)")
+            print(f"✅ YUBORILDI: #{post_number} - {title[:35]}... ({price_display})")
             save_seen_id(item_id)
             post_number += 1
             save_counter(post_number)
             sent_count += 1
         else:
-            print(f"⚠️ Telegramga yuborib bo'lmadi (ID: {item_id})")
+            print(f"⚠️ Yuborishda xatolik (ID: {item_id})")
 
         if sent_count >= 5:
             break
 
-    print(f"🏁 JARAYON YAKUNLANDI: Jami {sent_count} ta yangi e'lon kanalga joylandi.")
+    print(f"🏁 JARAYON YAKUNLANDI: Jami {sent_count} ta yangi e'lon joylandi.")
 
 if __name__ == "__main__":
     main()
