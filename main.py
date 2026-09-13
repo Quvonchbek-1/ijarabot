@@ -8,7 +8,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&query=ijara+kvartira"
+# OLX so'rovi filtsiz (xom ma'lumotlar olinadi)
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
 SEEN_FILE = "seen_ids.txt"
 COUNTER_FILE = "counter.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
@@ -19,7 +20,7 @@ def get_usd_rate():
         if res.status_code == 200:
             return float(res.json()[0]["Rate"])
     except Exception as e:
-        print(f"Valyuta kursini olishda xato: {e}")
+        print(f"Valyuta kursida xato: {e}")
     return 12800.0
 
 USD_RATE = get_usd_rate()
@@ -87,22 +88,20 @@ def send_telegram_teaser(caption, photos, item_id):
             media[0]["caption"] = caption
             media[0]["parse_mode"] = "HTML"
             
-            res1 = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup", json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
-            res2 = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup", json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                 "chat_id": CHANNEL_ID,
                 "text": "👇 E'lon egasi bilan bog'lanish uchun tugmani bosing:",
                 "reply_markup": reply_markup
             }, timeout=15)
-            print(f"Telegram javobi: {res2.status_code}")
         elif len(valid_photos) == 1:
-            res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json={
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json={
                 "chat_id": CHANNEL_ID,
                 "photo": valid_photos[0],
                 "caption": caption,
                 "parse_mode": "HTML",
                 "reply_markup": reply_markup
             }, timeout=15)
-            print(f"Telegram javobi: {res.status_code}")
     except Exception as e:
         print(f"Telegramga yuborishda xato: {e}")
 
@@ -111,13 +110,13 @@ def main():
     seen_ids = load_seen_ids()
     post_number = get_next_counter()
 
-    print("OLX'dan e'lonlar olinmoqda...")
+    print("OLX'dan so'rov yuborilmoqda...")
     try:
         res = cffi_requests.get(API_URL, impersonate="chrome120", timeout=15)
         offers = res.json().get("data", [])
-        print(f"OLX'dan {len(offers)} ta e'lon keldi.")
+        print(f"Jami {len(offers)} ta e'lon olindi.")
     except Exception as e:
-        print(f"OLX API so'rovida xatolik: {e}")
+        print(f"OLX so'rovida xatolik: {e}")
         return
 
     sent_count = 0
@@ -126,16 +125,28 @@ def main():
         if item_id in seen_ids:
             continue
 
+        title = item.get("title", "")
+        title_lower = title.lower()
+
+        # 1. Toshkent shahri filtri
         city_name = item.get("location", {}).get("city", {}).get("name", "")
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
             continue
 
-        usd_price = extract_price_in_usd(item)
-        if not usd_price or not (350 <= usd_price <= 1300):
-            print(f"E'lon narxi mos kelmadi: {usd_price}$ (ID: {item_id})")
+        # 2. Sutkalik (kunlik) ijara e'lonlarini chiqarib tashlash
+        if any(word in title_lower for word in ["sutka", "сутки", "sutkaga", "kunlik", "посуточно"]):
             continue
 
-        title = item.get("title", "Yangi e'lon")
+        # 3. Kvartira ijara kalit so'zlari tekshiruvi
+        rental_keywords = ["ijara", "аренда", "kvartira", "квартира", "сдаю", "xonali", "комн"]
+        if not any(word in title_lower for word in rental_keywords):
+            continue
+
+        # 4. Narx filtri ($350 - $1300)
+        usd_price = extract_price_in_usd(item)
+        if not usd_price or not (350 <= usd_price <= 1300):
+            continue
+
         district_name = item.get("location", {}).get("district", {}).get("name", "")
         location_str = f"{city_name}, {district_name}".strip(", ")
         phone_number = get_phone_number(item_id)
@@ -157,13 +168,13 @@ def main():
         post_number += 1
         save_counter(post_number)
         sent_count += 1
-        print(f"Yangi e'lon yuborildi: #{post_number} (ID: {item_id})")
+        print(f"Yuborildi: #{post_number} - {title} ({usd_price}$)")
 
         if sent_count >= 5:
             break
 
     if sent_count == 0:
-        print("Yangi va mezonlarga mos e'lon topilmadi.")
+        print("Filtrga mos yangi e'lon topilmadi.")
 
 if __name__ == "__main__":
     main()
