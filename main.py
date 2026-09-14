@@ -1,16 +1,19 @@
 import os
 import re
 import requests
-from curl_cffi import requests as cffi_requests
-from database import init_db, save_offer
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=40"
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=30"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "uz,ru;q=0.9,en;q=0.8"
+}
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -25,7 +28,7 @@ def save_seen_id(item_id):
 def get_phone_number(item_id):
     try:
         phone_url = f"https://www.olx.uz/api/v1/offers/{item_id}/phones/"
-        res = cffi_requests.get(phone_url, impersonate="chrome120", timeout=10)
+        res = requests.get(phone_url, headers=HEADERS, timeout=10)
         if res.status_code == 200:
             phones = res.json().get("data", {}).get("phones", [])
             if phones:
@@ -36,27 +39,27 @@ def get_phone_number(item_id):
                     clean = '+998' + clean
                 return clean
     except Exception as e:
-        print(f"Tel olishda xatosi ({item_id}): {e}")
+        print(f"Tel olishda xatolik ({item_id}): {e}")
     return "Ko'rsatilmagan"
 
 def get_offer_details(item_id):
-    """OLX'dan e'lonning to'liq tavsifini (description) olib keladi"""
     try:
         url = f"https://www.olx.uz/api/v1/offers/{item_id}/"
-        res = cffi_requests.get(url, impersonate="chrome120", timeout=10)
+        res = requests.get(url, headers=HEADERS, timeout=10)
         if res.status_code == 200:
             return res.json().get("data", {})
     except Exception as e:
-        print(f"Tafsilot olish xatosi ({item_id}): {e}")
+        print(f"Tafsilot olish xatolik ({item_id}): {e}")
     return {}
 
 def main():
+    from database import init_db, save_offer
     init_db()
     seen_ids = load_seen_ids()
     print("🌐 OLX'dan yangi e'lonlar tekshirilmoqda...")
 
     try:
-        res = cffi_requests.get(API_URL, impersonate="chrome120", timeout=20)
+        res = requests.get(API_URL, headers=HEADERS, timeout=20)
         if res.status_code != 200:
             print(f"OLX API xatosi: {res.status_code}")
             return
@@ -86,11 +89,10 @@ def main():
         details = get_offer_details(item_id)
         description = details.get("description", "")
         
-        # HTML teglarni tozalash va Telegram limiti uchun qisqartirish (maksimal 500 belgi)
         description_clean = re.sub(r'<br\s*/?>', '\n', description)
         description_clean = re.sub(r'<[^>]+>', '', description_clean).strip()
-        if len(description_clean) > 450:
-            description_clean = description_clean[:447] + "..."
+        if len(description_clean) > 400:
+            description_clean = description_clean[:397] + "..."
 
         price_obj = item.get("price", {})
         price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
@@ -136,7 +138,7 @@ def main():
             seen_ids.add(item_id)
             print(f"✅ Kanalga joylandi: {title[:30]}")
             sent_count += 1
-            if sent_count >= 5:
+            if sent_count >= 3:
                 break
         except Exception as e:
             print(f"Kanalga yuborishda xato: {e}")
