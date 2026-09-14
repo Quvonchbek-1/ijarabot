@@ -1,67 +1,35 @@
 import os
 import re
+import asyncio
 import requests
 from curl_cffi import requests as cffi_requests
 
-try:
-    from database import init_db, save_offer
-except ImportError:
-    def init_db(): pass
-    def save_offer(a, b, c, d, e): pass
+from aiogram import Bot, Dispatcher, html
+from aiogram.filters import CommandStart, CommandObject
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+
+from database import init_db, save_offer, get_offer
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=40"
 SEEN_FILE = "seen_ids.txt"
-COUNTER_FILE = "counter.txt"
-INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga?utm_source=qr&stkn=bGdocHlnNWMwYmJz"
+INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
-def get_usd_rate():
-    try:
-        res = requests.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=10)
-        if res.status_code == 200:
-            return float(res.json()[0]["Rate"])
-    except Exception as e:
-        print(f"Valyuta kursi xatosi: {e}")
-    return 12800.0
-
-USD_RATE = get_usd_rate()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
-        try:
-            with open(SEEN_FILE, "r", encoding="utf-8") as f:
-                return set(line.strip() for line in f if line.strip())
-        except Exception:
-            pass
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            return set(line.strip() for line in f if line.strip())
     return set()
 
 def save_seen_id(item_id):
-    try:
-        with open(SEEN_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{item_id}\n")
-    except Exception as e:
-        print(f"Xato (seen_ids): {e}")
-
-def get_next_counter():
-    if os.path.exists(COUNTER_FILE):
-        try:
-            with open(COUNTER_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    return int(content)
-        except Exception:
-            pass
-    return 1
-
-def save_counter(count):
-    try:
-        with open(COUNTER_FILE, "w", encoding="utf-8") as f:
-            f.write(str(count))
-    except Exception as e:
-        print(f"Xato (counter): {e}")
+    with open(SEEN_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{item_id}\n")
 
 def get_phone_number(item_id):
     try:
@@ -70,177 +38,123 @@ def get_phone_number(item_id):
         if res.status_code == 200:
             phones = res.json().get("data", {}).get("phones", [])
             if phones:
-                clean_phone = re.sub(r'[^\d+]', '', phones[0])
-                if not clean_phone.startswith('+') and clean_phone.startswith('998'):
-                    clean_phone = '+' + clean_phone
-                elif not clean_phone.startswith('+'):
-                    clean_phone = '+998' + clean_phone
-                return clean_phone
+                clean = re.sub(r'[^\d+]', '', phones[0])
+                if not clean.startswith('+') and clean.startswith('998'):
+                    clean = '+' + clean
+                elif not clean.startswith('+'):
+                    clean = '+998' + clean
+                return clean
     except Exception as e:
-        print(f"Tel raqam xatosi (ID: {item_id}): {e}")
+        print(f"Tel olishda xatosi ({item_id}): {e}")
     return "Ko'rsatilmagan"
 
-def extract_price_in_usd(item):
-    price_obj = item.get("price", {})
-    if isinstance(price_obj, dict):
-        val = price_obj.get("value")
-        curr = price_obj.get("currency")
-        if val is not None and val > 0:
-            if curr == "UZS":
-                return round(val / USD_RATE)
-            else:
-                return int(val)
-    return 0
-
-def send_telegram_teaser(caption, photos, item_id):
-    if not BOT_TOKEN or not CHANNEL_ID:
-        print("❌ BOT_TOKEN yoki CHANNEL_ID yo'q!")
-        return False
-
-    valid_photos = []
-    if isinstance(photos, list):
-        for p in photos[:10]:
-            if isinstance(p, dict) and p.get("link"):
-                valid_photos.append(p.get("link").replace("{width}", "1000").replace("{height}", "750"))
-
-    bot_deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}" if BOT_USERNAME else "https://t.me"
-    reply_markup = {
-        "inline_keyboard": [[
-            {"text": "🔓 Telefon raqamini ko'rish", "url": bot_deep_link}
-        ]]
-    }
-
-    try:
-        if len(valid_photos) >= 2:
-            media = [{"type": "photo", "media": url} for url in valid_photos]
-            media[0]["caption"] = caption
-            media[0]["parse_mode"] = "HTML"
-            
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup", json={"chat_id": CHANNEL_ID, "media": media}, timeout=15)
-            r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                "chat_id": CHANNEL_ID,
-                "text": "👇 E'lon egasi bilan bog'lanish uchun tugmani bosing:",
-                "reply_markup": reply_markup
-            }, timeout=15)
-            return r.status_code == 200
-        elif len(valid_photos) == 1:
-            r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json={
-                "chat_id": CHANNEL_ID,
-                "photo": valid_photos[0],
-                "caption": caption,
-                "parse_mode": "HTML",
-                "reply_markup": reply_markup
-            }, timeout=15)
-            return r.status_code == 200
+# --- TELEGRAM BOT TUGMA HANDLERI ---
+@dp.message(CommandStart())
+async def start_handler(message: Message, command: CommandObject):
+    args = command.args
+    if args and args.startswith("offer_"):
+        offer_id = args.replace("offer_", "").strip()
+        data = get_offer(offer_id)
+        
+        if data:
+            title, phone, price, location = data
+            phone_text = f"<code>{phone}</code>" if phone != "Ko'rsatilmagan" else "E'londa ko'rsatilmagan"
+            text = (
+                f"🏠 <b>E'lon:</b> {html.quote(title)}\n"
+                f"📍 <b>Manzil:</b> {location}\n"
+                f"💵 <b>Narx:</b> {price}\n\n"
+                f"📞 <b>Telefon raqam:</b> {phone_text}"
+            )
+            await message.answer(text, parse_mode="HTML")
         else:
-            r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                "chat_id": CHANNEL_ID,
-                "text": caption,
-                "parse_mode": "HTML",
-                "reply_markup": reply_markup
-            }, timeout=15)
-            return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram yuborishda xatolik: {e}")
-        return False
+            await message.answer("❌ Kechirasiz, ushbu e'lon bo'yicha ma'lumot topilmadi yoki eskirgan.")
+    else:
+        await message.answer("Xush kelibsiz! Kanaldagi e'lonlar telefon raqamini olish uchun e'londagi tugmani bosing.")
 
-def main():
-    print("🚀 SCRAPER ISHGA TUSHDI")
-    try:
-        init_db()
-    except Exception as e:
-        print(f"Baza xatosi: {e}")
-
+# --- SCRAPER FUNTSIYASI ---
+async def run_scraper():
     seen_ids = load_seen_ids()
-    post_number = get_next_counter()
-
-    print(f"📊 Bazada mavjud IDlar: {len(seen_ids)} ta")
-    print("🌐 OLX API'dan e'lonlar olinmoqda...")
+    print("🌐 OLX'dan yangi e'lonlar tekshirilmoqda...")
 
     try:
         res = cffi_requests.get(API_URL, impersonate="chrome120", timeout=20)
         if res.status_code != 200:
-            print(f"❌ OLX HTTP xatolik: {res.status_code}")
             return
         offers = res.json().get("data", [])
-        print(f"📦 OLX'dan kelgan jami e'lonlar: {len(offers)} ta")
     except Exception as e:
-        print(f"❌ OLX so'rov xatosi: {e}")
+        print(f"OLX API xatosi: {e}")
         return
 
-    sent_count = 0
     for item in offers:
         item_id = str(item.get("id", ""))
-        
-        if not item_id:
-            continue
-
-        if item_id in seen_ids:
-            print(f"⏭ O'tib yuborildi (Bazada bor): {item_id}")
+        if not item_id or item_id in seen_ids:
             continue
 
         title = item.get("title", "")
         title_lower = title.lower()
 
-        # 1. Shahar tekshiruvi (Toshkent / Ташкент)
-        city_name = ""
+        # Faqat Toshkent va Uy-joy e'lonlari
         location_data = item.get("location", {})
-        if isinstance(location_data, dict):
-            city_obj = location_data.get("city", {})
-            if isinstance(city_obj, dict):
-                city_name = city_obj.get("name", "")
-
+        city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
-            print(f"⏭ O'tib yuborildi (Toshkent emas): {title[:30]}")
             continue
 
-        # 2. Sutkalik e'lonlarni chiqarib tashlash
-        if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik", "посуточно"]):
-            print(f"⏭ O'tib yuborildi (Sutkalik): {title[:30]}")
+        if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik"]):
             continue
 
-        # Narx olinadi (cheklov mutlaqo olib tashlandi)
-        usd_price = extract_price_in_usd(item)
+        # Narx va ma'lumotlar
+        price_obj = item.get("price", {})
+        price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
+        price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
+        price_str = f"{price_val} {price_curr}" if price_val else "Kelishilgan holda"
 
-        district_name = ""
-        if isinstance(location_data, dict):
-            dist_obj = location_data.get("district", {})
-            if isinstance(dist_obj, dict):
-                district_name = dist_obj.get("name", "")
-
+        district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
         location_str = f"{city_name}, {district_name}".strip(", ")
-        phone_number = get_phone_number(item_id)
 
-        try:
-            save_offer(item_id, title, phone_number, usd_price, location_str)
-        except Exception as e:
-            print(f"Baza saqlash: {e}")
+        phone = get_phone_number(item_id)
+        save_offer(item_id, title, phone, price_str, location_str)
 
-        price_display = f"{usd_price}$" if usd_price > 0 else "Kelishilgan holda"
-        masked_phone = "+998 90 *** ** **"
+        # Telegramga kanal posti
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔓 Telefon raqamini ko'rish", url=deep_link)
+        ]])
+
         caption = (
             f"🏠 <b>{title}</b>\n"
             f"📍 <b>Manzil:</b> {location_str}\n\n"
-            f"💵 <b>Narx:</b> {price_display}\n"
-            f"📞 <b>Tel:</b> {masked_phone}\n\n"
-            f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>\n\n"
-            f"#id_{post_number}"
+            f"💵 <b>Narx:</b> {price_str}\n"
+            f"📞 <b>Tel:</b> +998 90 *** ** **\n\n"
+            f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>"
         )
 
-        success = send_telegram_teaser(caption, item.get("photos", []), item_id)
-        if success:
-            print(f"✅ YUBORILDI: #{post_number} - {title[:35]}... ({price_display})")
+        photos = item.get("photos", [])
+        valid_photo = photos[0].get("link", "").replace("{width}", "1000").replace("{height}", "750") if photos else None
+
+        try:
+            if valid_photo:
+                await bot.send_photo(chat_id=CHANNEL_ID, photo=valid_photo, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+            else:
+                await bot.send_message(chat_id=CHANNEL_ID, text=caption, parse_mode="HTML", reply_markup=keyboard)
+
             save_seen_id(item_id)
-            post_number += 1
-            save_counter(post_number)
-            sent_count += 1
-        else:
-            print(f"⚠️ Yuborishda xatolik (ID: {item_id})")
+            seen_ids.add(item_id)
+            print(f"✅ Kanalga joylandi: {title[:30]}")
+            await asyncio.sleep(3)
+        except Exception as e:
+            print(f"Kanalga yuborishda xato: {e}")
 
-        if sent_count >= 5:
-            break
+async def scraper_loop():
+    while True:
+        await run_scraper()
+        await asyncio.sleep(900)  # Har 15 daqiqada bir marta ishlaydi
 
-    print(f"🏁 JARAYON YAKUNLANDI: Jami {sent_count} ta yangi e'lon joylandi.")
+async def main():
+    init_db()
+    # Scraper va Botni bir vaqtda 24/7 ishlatish
+    asyncio.create_task(scraper_loop())
+    print("🚀 Bot va Scraper bir vaqtda ishga tushdi!")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
