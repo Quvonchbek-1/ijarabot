@@ -39,6 +39,17 @@ def get_phone_number(item_id):
         print(f"Tel olishda xatosi ({item_id}): {e}")
     return "Ko'rsatilmagan"
 
+def get_offer_details(item_id):
+    """OLX'dan e'lonning to'liq tavsifini (description) olib keladi"""
+    try:
+        url = f"https://www.olx.uz/api/v1/offers/{item_id}/"
+        res = cffi_requests.get(url, impersonate="chrome120", timeout=10)
+        if res.status_code == 200:
+            return res.json().get("data", {})
+    except Exception as e:
+        print(f"Tafsilot olish xatosi ({item_id}): {e}")
+    return {}
+
 def main():
     init_db()
     seen_ids = load_seen_ids()
@@ -47,10 +58,11 @@ def main():
     try:
         res = cffi_requests.get(API_URL, impersonate="chrome120", timeout=20)
         if res.status_code != 200:
+            print(f"OLX API xatosi: {res.status_code}")
             return
         offers = res.json().get("data", [])
     except Exception as e:
-        print(f"OLX API xatosi: {e}")
+        print(f"OLX so'rov xatosi: {e}")
         return
 
     sent_count = 0
@@ -70,6 +82,16 @@ def main():
         if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik"]):
             continue
 
+        # E'lonning to'liq tavsifini olish
+        details = get_offer_details(item_id)
+        description = details.get("description", "")
+        
+        # HTML teglarni tozalash va Telegram limiti uchun qisqartirish (maksimal 500 belgi)
+        description_clean = re.sub(r'<br\s*/?>', '\n', description)
+        description_clean = re.sub(r'<[^>]+>', '', description_clean).strip()
+        if len(description_clean) > 450:
+            description_clean = description_clean[:447] + "..."
+
         price_obj = item.get("price", {})
         price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
@@ -81,7 +103,7 @@ def main():
         phone = get_phone_number(item_id)
         save_offer(item_id, title, phone, price_str, location_str)
 
-        deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}"
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}" if BOT_USERNAME else "https://t.me"
         keyboard = {
             "inline_keyboard": [[
                 {"text": "🔓 Telefon raqamini ko'rish", "url": deep_link}
@@ -90,8 +112,9 @@ def main():
 
         caption = (
             f"🏠 <b>{title}</b>\n"
-            f"📍 <b>Manzil:</b> {location_str}\n\n"
-            f"💵 <b>Narx:</b> {price_str}\n"
+            f"📍 <b>Manzil:</b> {location_str}\n"
+            f"💵 <b>Narx:</b> {price_str}\n\n"
+            f"📝 <b>Tavsif:</b>\n{description_clean}\n\n"
             f"📞 <b>Tel:</b> +998 90 *** ** **\n\n"
             f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>"
         )
