@@ -22,15 +22,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-# Toshkent shahri bo'yicha ko'chmas mulk (nedvizhimost) kategoriyasi va 25-region (Toshkent)
-API_URL = "https://www.olx.uz/api/v1/offers/"
-API_PARAMS = {
-    "offset": 0,
-    "limit": 30,
-    "category_id": 35,  # Ko'chmas mulk
-    "region_id": 25,    # Toshkent
-}
-
+# Umumiy so'nggi e'lonlar (0 ta chiqib qolishining oldini oladi, filtrlar pastda bajariladi)
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
@@ -168,7 +161,7 @@ def main():
 
     try:
         log.info("OLX API'dan e'lonlar olinmoqda...")
-        res = scraper.get(API_URL, params=API_PARAMS, timeout=20)
+        res = scraper.get(API_URL, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
         if res.status_code != 200:
@@ -176,7 +169,7 @@ def main():
             return
 
         offers = res.json().get("data", [])
-        log.info("OLX'dan olingan e'lonlar soni: %d", len(offers))
+        log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
     except Exception as e:
         log.error("OLX so'rov xatosi: %s", e)
         return
@@ -196,11 +189,26 @@ def main():
         desc_lower = description.lower()
         full_text = f"{title_lower} {desc_lower}"
 
-        # 1. Sutkalik / kunlik e'lonlarni filtrlab tashlaymiz
-        if any(w in full_text for w in ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час"]):
+        # 1. Hududni tekshirish (Faqat Toshkent shahri)
+        location_data = item.get("location", {})
+        city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
+        region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
+        loc_full = f"{city_name} {region_name}".lower()
+
+        if "toshkent" not in loc_full and "ташкент" not in loc_full:
             continue
 
-        # 2. Faqat ijara e'lonlari ekanligini tekshiramiz (sotuvdagilarni chiqarib tashlaymiz)
+        # 2. Faqat uy/kvartira ijarasiga oidligini tekshiramiz (boshqa narsalarni o'tkazib yubormaslik uchun)
+        housing_keywords = ["kvartira", "kv", "dom", "uy", "komnata", "квартира", "дом", "комната", "arrenda", "ijara", "аренда"]
+        if not any(kw in full_text for kw in housing_keywords):
+            continue
+
+        # 3. Sutkalik / kunlik e'lonlarni filtrlab tashlaymiz
+        daily_keywords = ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно"]
+        if any(w in full_text for w in daily_keywords):
+            continue
+
+        # 4. Sotuvdagilarni chiqarib tashlab, faqat ijaraga qaratamiz
         if any(w in full_text for w in ["sotiladi", "продается", "sotish"]) and not any(w in full_text for w in ["ijara", "аренда", "arenda"]):
             continue
 
@@ -214,10 +222,8 @@ def main():
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
         price_str = f"{price_val} {price_curr}" if price_val else "Kelishilgan holda"
 
-        location_data = item.get("location", {})
-        city_name = location_data.get("city", {}).get("name", "Toshkent") if isinstance(location_data, dict) else "Toshkent"
         district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
-        location_str = f"{city_name}, {district_name}".strip(", ")
+        location_str = f"Toshkent, {district_name}".strip(", ")
 
         phone = get_phone_number(item_id)
         save_offer(item_id, title, phone, price_str, location_str)
@@ -234,18 +240,18 @@ def main():
         safe_price = html.escape(price_str)
         safe_description = html.escape(description_clean)
 
-        # Chiroyli va bezatilgan zamonaviy shablon
+        # Chiroyli, stiker va zamonaviy bezatilgan shablon
         caption = (
-            f"✨ <b>YANGI IJARA E'LONI!</b> ✨\n\n"
-            f"🏠 <b>{safe_title}</b>\n\n"
-            f"💵 <b>Narxi:</b> <code>{safe_price}</code>\n"
-            f"📍 <b>Manzil:</b> {safe_location}\n\n"
-            f"📝 <b>Qisqacha tavsif:</b>\n"
+            f"🏢 <b>YANGI UY IJARA E'LONI!</b> 🔑\n\n"
+            f"📌 <b>Sarlavha:</b> {safe_title}\n\n"
+            f"💰 <b>Narxi:</b> <code>{safe_price}</code> 💵\n"
+            f"📍 <b>Manzil:</b> {safe_location} 🌆\n\n"
+            f"📝 <b>Tavsif:</b>\n"
             f"<i>{safe_description}</i>\n\n"
             f"📞 <b>Aloqa:</b> +998 (90) *** ** **\n"
-            f"🔗 <i>To'liq raqamni ko'rish uchun pastdagi tugmani bosing!</i>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"📸 <b>Bizning kanal:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>"
+            f"✨ <i>Egasining raqamini ko'rish uchun pastdagi tugmani bosing!</i> 👇\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📢 <b>Bizning kanal:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a> 🚀"
         )
 
         photos = item.get("photos", [])
@@ -259,7 +265,7 @@ def main():
         if ok:
             save_seen_id(item_id)
             seen_ids.add(item_id)
-            log.info("✅ Chiroyli post kanalga joylandi: %s", title[:30])
+            log.info("✅ Chiroyli uy e'loni kanalga joylandi: %s", title[:30])
             sent_count += 1
             if sent_count >= 2:
                 break
