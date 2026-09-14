@@ -108,22 +108,10 @@ def get_offer_details(item_id):
     return {}
 
 
-def send_to_telegram(caption, photo_url, keyboard, retries=2):
+def send_to_telegram(caption, photo_urls, keyboard, retries=2):
     for attempt in range(1, retries + 1):
         try:
-            if photo_url:
-                res = scraper.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                    json={
-                        "chat_id": CHANNEL_ID,
-                        "photo": photo_url,
-                        "caption": caption,
-                        "parse_mode": "HTML",
-                        "reply_markup": keyboard,
-                    },
-                    timeout=15,
-                )
-            else:
+            if not photo_urls:
                 res = scraper.post(
                     f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                     json={
@@ -134,15 +122,57 @@ def send_to_telegram(caption, photo_url, keyboard, retries=2):
                     },
                     timeout=15,
                 )
+            elif len(photo_urls) == 1:
+                res = scraper.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    json={
+                        "chat_id": CHANNEL_ID,
+                        "photo": photo_urls[0],
+                        "caption": caption,
+                        "parse_mode": "HTML",
+                        "reply_markup": keyboard,
+                    },
+                    timeout=15,
+                )
+            else:
+                # Bir nechta rasmni albom (media group) ko'rinishida yuborish
+                media_list = []
+                for idx, url in enumerate(photo_urls[:10]):  # Telegram kopi bilan 10 ta rasm qabul qiladi
+                    media_item = {
+                        "type": "photo",
+                        "media": url
+                    }
+                    if idx == 0:
+                        media_item["caption"] = caption
+                        media_item["parse_mode"] = "HTML"
+                    media_list.append(media_item)
+
+                res = scraper.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup",
+                    json={
+                        "chat_id": CHANNEL_ID,
+                        "media": media_list
+                    },
+                    timeout=20,
+                )
+
+                # Telegram qoidasiga ko'ra sendMediaGroup'ga tugma qo'shib bo'lmaydi, shuning uchun tugmani pastdan alohida yuboramiz
+                if res.status_code == 200:
+                    scraper.post(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                        json={
+                            "chat_id": CHANNEL_ID,
+                            "text": "🔓 Telefon raqamini ko'rish uchun:",
+                            "reply_markup": keyboard
+                        },
+                        timeout=10,
+                    )
 
             if res.status_code == 200:
                 return True
 
             data = res.json()
             log.error("Telegram xatosi: %s — %s", res.status_code, data.get("description"))
-            if photo_url and "photo" in str(data.get("description", "")).lower():
-                photo_url = None
-                continue
             return False
         except Exception as e:
             log.error("Telegramga yuborishda xato: %s", e)
@@ -208,7 +238,6 @@ def main():
         if any(w in full_text for w in ["sotiladi", "продается", "sotish"]) and not any(w in full_text for w in ["ijara", "аренда", "arenda"]):
             continue
 
-        # Parametrlarni olish (Maydon, Qavat, Xonalar soni)
         params = details.get("params", [])
         rooms = "1"
         floor = "1"
@@ -247,7 +276,6 @@ def main():
 
         phone = get_phone_number(item_id)
         
-        # E'lon egasini aniqlash
         user_obj = details.get("user", {})
         owner_name = user_obj.get("name", "I Home Agency") if isinstance(user_obj, dict) else "I Home Agency"
 
@@ -265,7 +293,6 @@ def main():
         safe_price = html.escape(price_str)
         floor_str = f"{floor}/{total_floors}" if total_floors else floor
 
-        # Siz ko'rsatgan aniq shablon ko'rinishi
         caption = (
             f"🏠 {rooms} xonali kvartira ({safe_title})\n"
             f"📍 Manzil: {safe_location}\n\n"
@@ -285,18 +312,19 @@ def main():
             f"#id_{item_id}"
         )
 
+        # Barcha rasmlarni yig'ish (faqat bittasini emas, balki bir nechta rasmni olish)
         photos = item.get("photos", [])
-        valid_photo = (
-            photos[0].get("link", "").replace("{width}", "1000").replace("{height}", "750")
-            if photos else None
-        )
+        photo_urls = [
+            p.get("link", "").replace("{width}", "1000").replace("{height}", "750")
+            for p in photos if p.get("link")
+        ]
 
-        ok = send_to_telegram(caption, valid_photo, keyboard)
+        ok = send_to_telegram(caption, photo_urls, keyboard)
 
         if ok:
             save_seen_id(item_id)
             seen_ids.add(item_id)
-            log.info("✅ Istalganshakldagi e'lon kanalga joylandi: #id_%s", item_id)
+            log.info("✅ Ko'p rasmli e'lon kanalga joylandi: #id_%s", item_id)
             sent_count += 1
             if sent_count >= 2:
                 break
