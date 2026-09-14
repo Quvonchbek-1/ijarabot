@@ -22,10 +22,10 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-# Umumiy so'nggi e'lonlar (0 ta chiqib qolishining oldini oladi, filtrlar pastda bajariladi)
 API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
 SEEN_FILE = "seen_ids.txt"
-INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
+INSTAGRAM_LINK = "toshkent_ijaraga"
+TELEGRAM_CONTACT = "@turayev_bek"
 
 scraper = cloudscraper.create_scraper(
     browser={
@@ -94,7 +94,7 @@ def get_phone_number(item_id):
                 return clean
     except Exception as e:
         log.warning("Tel olishda xatolik (%s): %s", item_id, e)
-    return "Ko'rsatilmagan"
+    return "+998952522225"
 
 
 def get_offer_details(item_id):
@@ -170,8 +170,8 @@ def main():
 
         offers = res.json().get("data", [])
         log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
-    except Exception as e:
-        log.error("OLX so'rov xatosi: %s", e)
+    except Exception as x:
+        log.error("OLX so'rov xatosi: %s", x)
         return
 
     sent_count = 0
@@ -189,7 +189,6 @@ def main():
         desc_lower = description.lower()
         full_text = f"{title_lower} {desc_lower}"
 
-        # 1. Hududni tekshirish (Faqat Toshkent shahri)
         location_data = item.get("location", {})
         city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
         region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
@@ -198,34 +197,60 @@ def main():
         if "toshkent" not in loc_full and "ташкент" not in loc_full:
             continue
 
-        # 2. Faqat uy/kvartira ijarasiga oidligini tekshiramiz (boshqa narsalarni o'tkazib yubormaslik uchun)
         housing_keywords = ["kvartira", "kv", "dom", "uy", "komnata", "квартира", "дом", "комната", "arrenda", "ijara", "аренда"]
         if not any(kw in full_text for kw in housing_keywords):
             continue
 
-        # 3. Sutkalik / kunlik e'lonlarni filtrlab tashlaymiz
         daily_keywords = ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно"]
         if any(w in full_text for w in daily_keywords):
             continue
 
-        # 4. Sotuvdagilarni chiqarib tashlab, faqat ijaraga qaratamiz
         if any(w in full_text for w in ["sotiladi", "продается", "sotish"]) and not any(w in full_text for w in ["ijara", "аренда", "arenda"]):
             continue
 
-        description_clean = re.sub(r"<br\s*/?>", "\n", description)
-        description_clean = re.sub(r"<[^>]+>", "", description_clean).strip()
-        if len(description_clean) > 350:
-            description_clean = description_clean[:347] + "..."
+        # Parametrlarni olish (Maydon, Qavat, Xonalar soni)
+        params = details.get("params", [])
+        rooms = "1"
+        floor = "1"
+        total_floors = ""
+        area = ""
+
+        for p in params:
+            p_key = p.get("key")
+            p_val = p.get("value")
+            if isinstance(p_val, dict):
+                val_str = p_val.get("label", str(p_val.get("value", "")))
+            else:
+                val_str = str(p_val)
+                
+            if p_key == "rooms":
+                rooms = val_str
+            elif p_key == "floor":
+                floor = val_str
+            elif p_key == "total_floors":
+                total_floors = val_str
+            elif p_key == "m":
+                area = val_str
+
+        if not rooms:
+            m_room = re.search(r'(\d+)\s*-?\s*xon', title, re.IGNORECASE)
+            if m_room:
+                rooms = m_room.group(1)
 
         price_obj = item.get("price", {})
         price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
-        price_str = f"{price_val} {price_curr}" if price_val else "Kelishilgan holda"
+        price_str = f"{price_val}{price_curr}" if price_val else "Kelishilgan holda"
 
-        district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
-        location_str = f"Toshkent, {district_name}".strip(", ")
+        district_name = location_data.get("district", {}).get("name", "Mirobod tumani") if isinstance(location_data, dict) else "Mirobod tumani"
+        location_str = f"Toshkent, {district_name}"
 
         phone = get_phone_number(item_id)
+        
+        # E'lon egasini aniqlash
+        user_obj = details.get("user", {})
+        owner_name = user_obj.get("name", "I Home Agency") if isinstance(user_obj, dict) else "I Home Agency"
+
         save_offer(item_id, title, phone, price_str, location_str)
 
         deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}" if BOT_USERNAME else "https://t.me"
@@ -238,20 +263,26 @@ def main():
         safe_title = html.escape(title)
         safe_location = html.escape(location_str)
         safe_price = html.escape(price_str)
-        safe_description = html.escape(description_clean)
+        floor_str = f"{floor}/{total_floors}" if total_floors else floor
 
-        # Chiroyli, stiker va zamonaviy bezatilgan shablon
+        # Siz ko'rsatgan aniq shablon ko'rinishi
         caption = (
-            f"🏢 <b>YANGI UY IJARA E'LONI!</b> 🔑\n\n"
-            f"📌 <b>Sarlavha:</b> {safe_title}\n\n"
-            f"💰 <b>Narxi:</b> <code>{safe_price}</code> 💵\n"
-            f"📍 <b>Manzil:</b> {safe_location} 🌆\n\n"
-            f"📝 <b>Tavsif:</b>\n"
-            f"<i>{safe_description}</i>\n\n"
-            f"📞 <b>Aloqa:</b> +998 (90) *** ** **\n"
-            f"✨ <i>Egasining raqamini ko'rish uchun pastdagi tugmani bosing!</i> 👇\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📢 <b>Bizning kanal:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a> 🚀"
+            f"🏠 {rooms} xonali kvartira ({safe_title})\n"
+            f"📍 Manzil: {safe_location}\n\n"
+            f"📐 Maydon: {area if area else '76'}\n"
+            f"🏢 Qavat: {floor_str}\n"
+            f"🛋 Mebellar: To‘liq jihozlangan\n"
+            f"✨ Ta'mir: Yevro remont\n"
+            f"✅ Barcha sharoitlar mavjud\n\n"
+            f"👨‍👩‍👧 Mos keladi:\n"
+            f"• Hammaga\n\n"
+            f"💵 Narx: {safe_price}\n"
+            f"📞 Tel: {phone}\n"
+            f"👤 E'lon egasi: {owner_name}\n\n"
+            f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
+            f"📸 INSTAGRAM: {INSTAGRAM_LINK}\n"
+            f"📩 TELEGRAM: {TELEGRAM_CONTACT}\n\n"
+            f"#id_{item_id}"
         )
 
         photos = item.get("photos", [])
@@ -265,7 +296,7 @@ def main():
         if ok:
             save_seen_id(item_id)
             seen_ids.add(item_id)
-            log.info("✅ Chiroyli uy e'loni kanalga joylandi: %s", title[:30])
+            log.info("✅ Istalganshakldagi e'lon kanalga joylandi: #id_%s", item_id)
             sent_count += 1
             if sent_count >= 2:
                 break
