@@ -7,23 +7,28 @@ def init_db():
         CREATE TABLE IF NOT EXISTS offers (
             offer_id TEXT PRIMARY KEY,
             title TEXT,
-            phone TEXT
+            phone TEXT,
+            price TEXT,
+            location TEXT
         )
     ''')
     conn.commit()
     conn.close()
 
-def save_offer(offer_id: str, title: str, phone: str):
+def save_offer(offer_id, title, phone, price, location):
     conn = sqlite3.connect('housing.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO offers VALUES (?, ?, ?)', (offer_id, title, phone))
+    cursor.execute('''
+        INSERT OR REPLACE INTO offers (offer_id, title, phone, price, location)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (str(offer_id), title, phone, str(price), location))
     conn.commit()
     conn.close()
 
-def get_phone_number(offer_id: str):
+def get_offer(offer_id):
     conn = sqlite3.connect('housing.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT title, phone FROM offers WHERE offer_id = ?', (offer_id,))
+    cursor.execute('SELECT title, phone, price, location FROM offers WHERE offer_id = ?', (str(offer_id),))
     result = cursor.fetchone()
     conn.close()
     return result
