@@ -1,58 +1,29 @@
 import sqlite3
-from datetime import datetime
-
-DB_NAME = "database.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect('housing.db')
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS offers (
-            id TEXT PRIMARY KEY,
+            offer_id TEXT PRIMARY KEY,
             title TEXT,
-            phone TEXT,
-            price_usd INTEGER,
-            location TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            phone TEXT
         )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            sub_until TIMESTAMP
-        )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
-def save_offer(offer_id, title, phone, price_usd, location):
-    conn = sqlite3.connect(DB_NAME)
+def save_offer(offer_id: str, title: str, phone: str):
+    conn = sqlite3.connect('housing.db')
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO offers (id, title, phone, price_usd, location)
-        VALUES (?, ?, ?, ?, ?)
-    """, (offer_id, title, phone, price_usd, location))
+    cursor.execute('INSERT OR REPLACE INTO offers VALUES (?, ?, ?)', (offer_id, title, phone))
     conn.commit()
     conn.close()
 
-def get_offer(offer_id):
-    conn = sqlite3.connect(DB_NAME)
+def get_phone_number(offer_id: str):
+    conn = sqlite3.connect('housing.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT title, phone, price_usd, location FROM offers WHERE id = ?", (offer_id,))
-    row = cursor.fetchone()
+    cursor.execute('SELECT title, phone FROM offers WHERE offer_id = ?', (offer_id,))
+    result = cursor.fetchone()
     conn.close()
-    return row
-
-def is_user_subscribed(user_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT sub_until FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row and row[0]:
-        sub_date = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-        return sub_date > datetime.now()
-    return False
-
-if __name__ == "__main__":
-    init_db()
+    return result
