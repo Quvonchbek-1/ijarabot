@@ -6,7 +6,6 @@ import logging
 import subprocess
 import sys
 
-# Cloudscraper kutubxonasi yo'q bo'lsa avtomatik o'rnatish
 try:
     import cloudscraper
 except ImportError:
@@ -23,11 +22,18 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=25"
+# Toshkent shahri bo'yicha ko'chmas mulk (nedvizhimost) kategoriyasi va 25-region (Toshkent)
+API_URL = "https://www.olx.uz/api/v1/offers/"
+API_PARAMS = {
+    "offset": 0,
+    "limit": 30,
+    "category_id": 35,  # Ko'chmas mulk
+    "region_id": 25,    # Toshkent
+}
+
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
-# Cloudflare himoyasini chetlab o'tuvchi maxsus scraper sessiyasi
 scraper = cloudscraper.create_scraper(
     browser={
         'browser': 'chrome',
@@ -40,11 +46,9 @@ scraper = cloudscraper.create_scraper(
 def validate_config():
     problems = []
     if not BOT_TOKEN:
-        problems.append("BOT_TOKEN bo'sh — Telegram bot tokeni kiritilmagan.")
+        problems.append("BOT_TOKEN bo'sh.")
     if not CHANNEL_ID:
         problems.append("CHANNEL_ID bo'sh.")
-    elif not (CHANNEL_ID.startswith("@") or CHANNEL_ID.startswith("-")):
-        problems.append(f"CHANNEL_ID='{CHANNEL_ID}' noto'g'ri formatda.")
     if problems:
         for p in problems:
             log.error(p)
@@ -154,7 +158,7 @@ def send_to_telegram(caption, photo_url, keyboard, retries=2):
 
 
 def main():
-    log.info("--- BOT ISHGA TUSHDI (Cloudscraper rejimi) ---")
+    log.info("--- BOT ISHGA TUSHDI ---")
     if not validate_config() or not check_bot_access():
         return
 
@@ -163,12 +167,12 @@ def main():
     seen_ids = load_seen_ids()
 
     try:
-        log.info("OLX API'ga so'rov yuborilmoqda...")
-        res = scraper.get(API_URL, timeout=20)
+        log.info("OLX API'dan e'lonlar olinmoqda...")
+        res = scraper.get(API_URL, params=API_PARAMS, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
         if res.status_code != 200:
-            log.error("OLX hali ham bloklayapti! Status code: %s", res.status_code)
+            log.error("OLX javob bermadi! Status code: %s", res.status_code)
             return
 
         offers = res.json().get("data", [])
@@ -185,29 +189,33 @@ def main():
         if not item_id or item_id in seen_ids:
             continue
 
-        title_lower = title.lower()
-        location_data = item.get("location", {})
-        city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
-
-        if city_name and "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
-            continue
-
-        if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik"]):
-            continue
-
         details = get_offer_details(item_id)
         description = details.get("description", "")
+        
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        full_text = f"{title_lower} {desc_lower}"
+
+        # 1. Sutkalik / kunlik e'lonlarni filtrlab tashlaymiz
+        if any(w in full_text for w in ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час"]):
+            continue
+
+        # 2. Faqat ijara e'lonlari ekanligini tekshiramiz (sotuvdagilarni chiqarib tashlaymiz)
+        if any(w in full_text for w in ["sotiladi", "продается", "sotish"]) and not any(w in full_text for w in ["ijara", "аренда", "arenda"]):
+            continue
 
         description_clean = re.sub(r"<br\s*/?>", "\n", description)
         description_clean = re.sub(r"<[^>]+>", "", description_clean).strip()
-        if len(description_clean) > 400:
-            description_clean = description_clean[:397] + "..."
+        if len(description_clean) > 350:
+            description_clean = description_clean[:347] + "..."
 
         price_obj = item.get("price", {})
         price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
         price_str = f"{price_val} {price_curr}" if price_val else "Kelishilgan holda"
 
+        location_data = item.get("location", {})
+        city_name = location_data.get("city", {}).get("name", "Toshkent") if isinstance(location_data, dict) else "Toshkent"
         district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
         location_str = f"{city_name}, {district_name}".strip(", ")
 
@@ -226,13 +234,18 @@ def main():
         safe_price = html.escape(price_str)
         safe_description = html.escape(description_clean)
 
+        # Chiroyli va bezatilgan zamonaviy shablon
         caption = (
-            f"🏠 <b>{safe_title}</b>\n"
-            f"📍 <b>Manzil:</b> {safe_location}\n"
-            f"💵 <b>Narx:</b> {safe_price}\n\n"
-            f"📝 <b>Tavsif:</b>\n{safe_description}\n\n"
-            f"📞 <b>Tel:</b> +998 90 *** ** **\n\n"
-            f"📸 <b>INSTAGRAM:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>"
+            f"✨ <b>YANGI IJARA E'LONI!</b> ✨\n\n"
+            f"🏠 <b>{safe_title}</b>\n\n"
+            f"💵 <b>Narxi:</b> <code>{safe_price}</code>\n"
+            f"📍 <b>Manzil:</b> {safe_location}\n\n"
+            f"📝 <b>Qisqacha tavsif:</b>\n"
+            f"<i>{safe_description}</i>\n\n"
+            f"📞 <b>Aloqa:</b> +998 (90) *** ** **\n"
+            f"🔗 <i>To'liq raqamni ko'rish uchun pastdagi tugmani bosing!</i>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📸 <b>Bizning kanal:</b> <a href='{INSTAGRAM_LINK}'>toshkent_ijaraga</a>"
         )
 
         photos = item.get("photos", [])
@@ -246,7 +259,7 @@ def main():
         if ok:
             save_seen_id(item_id)
             seen_ids.add(item_id)
-            log.info("✅ Kanalga muvaffaqiyatli joylandi: %s", title[:30])
+            log.info("✅ Chiroyli post kanalga joylandi: %s", title[:30])
             sent_count += 1
             if sent_count >= 2:
                 break
