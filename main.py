@@ -15,12 +15,10 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-# Toshkent shahri bo'yicha uylar ijarasi kategoriyasi API manzili
 API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=20&category_id=15&region_id=25"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
-# OLX himoyasini aldash uchun to'liq brauzer sarlavhalari
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
@@ -212,6 +210,12 @@ def main():
     log.info("Oldindan ko'rilgan e'lonlar soni: %d", len(seen_ids))
 
     try:
+        # 1. Oldindan bosh sahifaga kirib, kuki va tokenlarni yig'ib olamiz (WAF blokirovkasini chetlab o'tish uchun)
+        log.info("OLX sessiyasi ochilmoqda...")
+        session.get("https://www.olx.uz/", timeout=15)
+        time.sleep(1)
+
+        # 2. Asosiy API so'rovi
         res = session.get(API_URL, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         if res.status_code != 200:
@@ -238,7 +242,6 @@ def main():
         location_data = item.get("location", {})
         city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
 
-        # Hududni tekshirish (region_id qo'shilgani uchun allaqachon Toshkent chiqadi, qo'shimcha filtr)
         if city_name and "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
             continue
 
