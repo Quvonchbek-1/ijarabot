@@ -6,7 +6,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=30"
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=20"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
@@ -53,17 +53,23 @@ def get_offer_details(item_id):
     return {}
 
 def main():
+    print(f"--- BOT ISHGA TUSHDI ---")
+    print(f"CHANNEL_ID: {CHANNEL_ID}")
+    print(f"BOT_TOKEN mavjudligi: {'HA' if BOT_TOKEN else 'YOQ'}")
+
     from database import init_db, save_offer
     init_db()
     seen_ids = load_seen_ids()
-    print("🌐 OLX'dan yangi e'lonlar tekshirilmoqda...")
+    print(f"Oldindan ko'rilgan e'lonlar soni: {len(seen_ids)}")
 
     try:
         res = requests.get(API_URL, headers=HEADERS, timeout=20)
+        print(f"OLX API javob kodi: {res.status_code}")
         if res.status_code != 200:
-            print(f"OLX API xatosi: {res.status_code}")
+            print(f"OLX API xatosi!")
             return
         offers = res.json().get("data", [])
+        print(f"OLX'dan olingan e'lonlar soni: {len(offers)}")
     except Exception as e:
         print(f"OLX so'rov xatosi: {e}")
         return
@@ -71,21 +77,29 @@ def main():
     sent_count = 0
     for item in offers:
         item_id = str(item.get("id", ""))
-        if not item_id or item_id in seen_ids:
+        title = item.get("title", "")
+        
+        if not item_id:
+            continue
+            
+        if item_id in seen_ids:
+            print(f"O'tkazib yuborildi (oldindan bor): {title[:20]} (ID: {item_id})")
             continue
 
-        title = item.get("title", "")
         title_lower = title.lower()
-
         location_data = item.get("location", {})
         city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
+        
+        print(f"Tekshirilmoqda: {title} | Shahar: {city_name}")
+
         if "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
+            print(f"-> Toshkent emas, tashlab yuborildi.")
             continue
 
         if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik"]):
+            print(f"-> Sutkalik e'lon, tashlab yuborildi.")
             continue
 
-        # E'lonning to'liq tavsifini olish
         details = get_offer_details(item_id)
         description = details.get("description", "")
         
@@ -126,22 +140,27 @@ def main():
 
         try:
             if valid_photo:
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json={
+                tg_res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json={
                     "chat_id": CHANNEL_ID, "photo": valid_photo, "caption": caption, "parse_mode": "HTML", "reply_markup": keyboard
                 }, timeout=15)
             else:
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+                tg_res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                     "chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML", "reply_markup": keyboard
                 }, timeout=15)
 
-            save_seen_id(item_id)
-            seen_ids.add(item_id)
-            print(f"✅ Kanalga joylandi: {title[:30]}")
-            sent_count += 1
-            if sent_count >= 3:
-                break
+            print(f"Telegram API javobi: {tg_res.status_code} - {tg_res.text}")
+
+            if tg_res.status_code == 200:
+                save_seen_id(item_id)
+                seen_ids.add(item_id)
+                print(f"✅ Kanalga muvaffaqiyatli joylandi: {title[:30]}")
+                sent_count += 1
+                if sent_count >= 2:
+                    break
+            else:
+                print(f"❌ Telegramga yuborishda xatolik yuz berdi!")
         except Exception as e:
-            print(f"Kanalga yuborishda xato: {e}")
+            print(f"Telegramga so'rov yuborishda xato: {e}")
 
 if __name__ == "__main__":
     main()
