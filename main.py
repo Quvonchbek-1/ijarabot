@@ -15,7 +15,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=20&category_id=15&region_id=25"
+# Asl ishlaydigan toza API manzil (filtrlar pastda kod ichida bajariladi)
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=25"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "https://www.instagram.com/toshkent_ijaraga"
 
@@ -23,15 +24,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "uz-UZ,uz;q=0.9,en-US;q=0.8,en;q=0.7,ru;q=0.6",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.olx.uz/nedvizhimost/kvartiry/arrenda-dolgosrochnaya/tashkent/",
-    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.olx.uz/",
 }
 
 session = requests.Session()
@@ -210,12 +203,11 @@ def main():
     log.info("Oldindan ko'rilgan e'lonlar soni: %d", len(seen_ids))
 
     try:
-        # 1. Oldindan bosh sahifaga kirib, kuki va tokenlarni yig'ib olamiz (WAF blokirovkasini chetlab o'tish uchun)
+        # Brauzer kuki va sessiyasini ochib olish
         log.info("OLX sessiyasi ochilmoqda...")
         session.get("https://www.olx.uz/", timeout=15)
         time.sleep(1)
 
-        # 2. Asosiy API so'rovi
         res = session.get(API_URL, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         if res.status_code != 200:
@@ -242,10 +234,12 @@ def main():
         location_data = item.get("location", {})
         city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
 
+        # Toshkent shahriga tegishliligini tekshirish
         if city_name and "toshkent" not in city_name.lower() and "ташкент" not in city_name.lower():
             continue
 
-        if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik"]):
+        # Kunlik/sutkalik e'lonlarni chiqarib tashlash
+        if any(w in title_lower for w in ["sutka", "сутки", "sutkaga", "kunlik", "соatiga", "soatlik"]):
             continue
 
         details = get_offer_details(item_id)
