@@ -24,11 +24,3 @@ def save_offer(offer_id, title, phone, price, location):
     ''', (str(offer_id), title, phone, str(price), location))
     conn.commit()
     conn.close()
-
-def get_offer(offer_id):
-    conn = sqlite3.connect('housing.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT title, phone, price, location FROM offers WHERE offer_id = ?', (str(offer_id),))
-    result = cursor.fetchone()
-    conn.close()
-    return result
