@@ -272,7 +272,6 @@ def main():
 
         details = get_offer_details(item_id)
         
-        # Keskin va kuchaytirilgan filtr
         if not is_valid_housing_rental(item, details):
             continue
 
@@ -300,7 +299,6 @@ def main():
         safe_location = html.escape(location_str)
         safe_price = html.escape(price_str)
 
-        # Eski formatga o'xshash toza shablon
         caption = (
             f"🏠 <b>{safe_title}</b>\n\n"
             f"📍 Manzil: {safe_location}\n"
