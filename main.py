@@ -109,15 +109,11 @@ def get_offer_details(item_id):
 
 
 def is_valid_housing_rental(item, details):
-    """
-    Faqat Toshkent shahriga tegishli, uzoq muddatli uy/kvartira ijarasi ekanligini 
-    aniqlovchi qattiq filtr funksiyasi.
-    """
     title = item.get("title", "")
     description = details.get("description", "")
     full_text = f"{title} {description}".lower()
 
-    # 1. Manzil tekshiruvi: Faqat Toshkent shahri bo'lishi shart
+    # 1. Toshkent shahri tekshiruvi
     location_data = item.get("location", {})
     city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
     region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
@@ -127,19 +123,23 @@ def is_valid_housing_rental(item, details):
     if "toshkent" not in loc_full and "ташкент" not in loc_full:
         return False
 
-    # 2. Qora ro'yxat (Agar quyidagilarning birortasi bo'lsa, darhol rad etiladi)
+    # 2. Qattiq qora ro'yxat (Texnika, qozon, buyumlar, sutkalik va boshqalar)
     forbidden_words = [
+        # Texnika va uskunalar (Ziffler, qozon va boshqalar)
+        "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor", 
+        "sovutgich", "kir yuvish", "pechka", "plita", "aspirator", "duxovka", "agregat", 
+        "generator", "stabilizator", "nasos", "radiator", "artel", "lg", "samsung", "bosch",
         # Sutkalik / Kunlik
-        "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно", "haftasiga", "соат", "кунлик",
-        # Boshqa narsalar / Buyumlar / Xizmatlar
-        "avto", "mashina", "zapchast", "telefon", "iphone", "samsung", "noutbuk", "kompyuter", 
-        "ish o'rni", "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "talab qilinadi",
-        "ishlaydi", "sotuvchi", "ofischi", "ustaxona", "tozalash", "gilam", "mebel yasash"
+        "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
+        # Boshqa narsalar va xizmatlar
+        "avto", "mashina", "zapchast", "telefon", "iphone", "noutbuk", "kompyuter", 
+        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "talab qilinadi",
+        "gilam", "matras", "mebel sotiladi", "kolyaska"
     ]
     if any(word in full_text for word in forbidden_words):
         return False
 
-    # 3. Sotishga oid so'zlar (Agar sotish bo'lsa-yu, ijaraga aloqasi bo'lmasa tashlab yuboramiz)
+    # 3. Sotishga oid so'zlar
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
     rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kirishga tayyor"]
     
@@ -149,7 +149,7 @@ def is_valid_housing_rental(item, details):
     if has_sale and not has_rental:
         return False
 
-    # 4. Majburiy uy/kvartira kalit so'zlari (Bularsiz e'lon o'tmaydi)
+    # 4. Majburiy uy/kvartira kalit so'zlari
     housing_keywords = [
         "kvartira", "kv", "dom", "uy", "komnata", "xona", "xonali", 
         "квартира", "дом", "комната", "комнатная", "студия", "studio", "novostroyka", "uchastka"
@@ -264,7 +264,7 @@ def main():
 
         details = get_offer_details(item_id)
         
-        # Keskin va kuchaytirilgan filtrdan o'tkazamiz
+        # Kuchaytirilgan filtr
         if not is_valid_housing_rental(item, details):
             continue
 
@@ -303,7 +303,7 @@ def main():
         price_str = f"{price_val}{price_curr}" if price_val else "Kelishilgan holda"
 
         location_data = item.get("location", {})
-        district_name = location_data.get("district", {}).get("name", "Toshkent tumani") if isinstance(location_data, dict) else "Toshkent tumani"
+        district_name = location_data.get("district", {}).get("name", "Mirobod tumani") if isinstance(location_data, dict) else "Mirobod tumani"
         location_str = f"Toshkent, {district_name}"
 
         phone = get_phone_number(item_id)
