@@ -113,48 +113,56 @@ def is_valid_housing_rental(item, details):
     description = details.get("description", "")
     full_text = f"{title} {description}".lower()
 
-    # 1. Toshkent shahri tekshiruvi
+    # 1. Manzil: Faqat Toshkent shahri
     location_data = item.get("location", {})
     city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
     region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
-    district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
-    loc_full = f"{city_name} {region_name} {district_name}".lower()
+    loc_full = f"{city_name} {region_name}".lower()
 
     if "toshkent" not in loc_full and "ташкент" not in loc_full:
         return False
 
-    # 2. Qattiq qora ro'yxat (Texnika, qozon, buyumlar, sutkalik va boshqalar)
+    # 2. Narx filtri ($300 - $2000, agar narx yo'q yoki mos kelmasa - tashlab yuboramiz)
+    price_obj = item.get("price", {})
+    price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
+    price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
+
+    if not price_val or price_val <= 0:
+        return False
+
+    price_in_usd = price_val
+    if price_curr.upper() in ["UZS", "SUM", "СУМ"]:
+        price_in_usd = price_val / 12800.0  # O'rtacha kurs bo'yicha dollarga o'tkazamiz
+
+    if not (300 <= price_in_usd <= 2000):
+        return False
+
+    # 3. Haqiqiy ko'chmas mulk parametri tekshiruvi (Texnikalarda 'rooms' parametri bo'lmaydi)
+    params = details.get("params", [])
+    has_rooms_param = any(p.get("key") == "rooms" for p in params)
+    if not has_rooms_param:
+        return False
+
+    # 4. Qora ro'yxat (Texnika, sutkalik va boshqa narsalar)
     forbidden_words = [
-        # Texnika va uskunalar (Ziffler, qozon va boshqalar)
-        "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor", 
-        "sovutgich", "kir yuvish", "pechka", "plita", "aspirator", "duxovka", "agregat", 
+        "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor",
+        "sovutgich", "kir yuvish", "pechka", "plita", "aspirator", "duxovka", "agregat",
         "generator", "stabilizator", "nasos", "radiator", "artel", "lg", "samsung", "bosch",
-        # Sutkalik / Kunlik
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
-        # Boshqa narsalar va xizmatlar
-        "avto", "mashina", "zapchast", "telefon", "iphone", "noutbuk", "kompyuter", 
-        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "talab qilinadi",
-        "gilam", "matras", "mebel sotiladi", "kolyaska"
+        "avto", "mashina", "zapchast", "telefon", "iphone", "noutbuk", "kompyuter",
+        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "gilam", "matras"
     ]
     if any(word in full_text for word in forbidden_words):
         return False
 
-    # 3. Sotishga oid so'zlar
+    # 5. Sotishga oid so'zlar (ijarasiz)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
-    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kirishga tayyor"]
+    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi"]
     
     has_sale = any(w in full_text for w in sale_words)
     has_rental = any(w in full_text for w in rental_words)
 
     if has_sale and not has_rental:
-        return False
-
-    # 4. Majburiy uy/kvartira kalit so'zlari
-    housing_keywords = [
-        "kvartira", "kv", "dom", "uy", "komnata", "xona", "xonali", 
-        "квартира", "дом", "комната", "комнатная", "студия", "studio", "novostroyka", "uchastka"
-    ]
-    if not any(kw in full_text for kw in housing_keywords):
         return False
 
     return True
@@ -264,52 +272,20 @@ def main():
 
         details = get_offer_details(item_id)
         
-        # Kuchaytirilgan filtr
+        # Keskin va kuchaytirilgan filtr
         if not is_valid_housing_rental(item, details):
             continue
-
-        description = details.get("description", "")
-        params = details.get("params", [])
-        rooms = "1"
-        floor = "1"
-        total_floors = ""
-        area = ""
-
-        for p in params:
-            p_key = p.get("key")
-            p_val = p.get("value")
-            if isinstance(p_val, dict):
-                val_str = p_val.get("label", str(p_val.get("value", "")))
-            else:
-                val_str = str(p_val)
-                
-            if p_key == "rooms":
-                rooms = val_str
-            elif p_key == "floor":
-                floor = val_str
-            elif p_key == "total_floors":
-                total_floors = val_str
-            elif p_key == "m":
-                area = val_str
-
-        if not rooms or rooms == "1":
-            m_room = re.search(r'(\d+)\s*-?\s*xon', title, re.IGNORECASE)
-            if m_room:
-                rooms = m_room.group(1)
 
         price_obj = item.get("price", {})
         price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
-        price_str = f"{price_val}{price_curr}" if price_val else "Kelishilgan holda"
+        price_str = f"{price_val} {price_curr}" if price_val else "Kelishilgan holda"
 
         location_data = item.get("location", {})
-        district_name = location_data.get("district", {}).get("name", "Mirobod tumani") if isinstance(location_data, dict) else "Mirobod tumani"
+        district_name = location_data.get("district", {}).get("name", "Toshkent") if isinstance(location_data, dict) else "Toshkent"
         location_str = f"Toshkent, {district_name}"
 
         phone = get_phone_number(item_id)
-        
-        user_obj = details.get("user", {})
-        owner_name = user_obj.get("name", "I Home Agency") if isinstance(user_obj, dict) else "I Home Agency"
 
         save_offer(item_id, title, phone, price_str, location_str)
 
@@ -323,22 +299,13 @@ def main():
         safe_title = html.escape(title)
         safe_location = html.escape(location_str)
         safe_price = html.escape(price_str)
-        floor_str = f"{floor}/{total_floors}" if total_floors else floor
 
+        # Eski formatga o'xshash toza shablon
         caption = (
-            f"🏠 {rooms} xonali kvartira ({safe_title})\n"
-            f"📍 Manzil: {safe_location}\n\n"
-            f"📐 Maydon: {area if area else '76'}\n"
-            f"🏢 Qavat: {floor_str}\n"
-            f"🛋 Mebellar: To‘liq jihozlangan\n"
-            f"✨ Ta'mir: Yevro remont\n"
-            f"✅ Barcha sharoitlar mavjud\n\n"
-            f"👨‍👩‍👧 Mos keladi:\n"
-            f"• Hammaga\n\n"
+            f"🏠 <b>{safe_title}</b>\n\n"
+            f"📍 Manzil: {safe_location}\n"
             f"💵 Narx: {safe_price}\n"
-            f"📞 Tel: {phone}\n"
-            f"👤 E'lon egasi: {owner_name}\n\n"
-            f"⚡️ Joylashuvi juda qulay va infratuzilma rivojlangan\n\n"
+            f"📞 Tel: {phone}\n\n"
             f"📸 INSTAGRAM: {INSTAGRAM_LINK}\n"
             f"📩 TELEGRAM: {TELEGRAM_CONTACT}\n\n"
             f"#id_{item_id}"
