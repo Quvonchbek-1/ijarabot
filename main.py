@@ -108,6 +108,58 @@ def get_offer_details(item_id):
     return {}
 
 
+def is_valid_housing_rental(item, details):
+    """
+    Faqat Toshkent shahriga tegishli, uzoq muddatli uy/kvartira ijarasi ekanligini 
+    aniqlovchi qattiq filtr funksiyasi.
+    """
+    title = item.get("title", "")
+    description = details.get("description", "")
+    full_text = f"{title} {description}".lower()
+
+    # 1. Manzil tekshiruvi: Faqat Toshkent shahri bo'lishi shart
+    location_data = item.get("location", {})
+    city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
+    region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
+    district_name = location_data.get("district", {}).get("name", "") if isinstance(location_data, dict) else ""
+    loc_full = f"{city_name} {region_name} {district_name}".lower()
+
+    if "toshkent" not in loc_full and "ташкент" not in loc_full:
+        return False
+
+    # 2. Qora ro'yxat (Agar quyidagilarning birortasi bo'lsa, darhol rad etiladi)
+    forbidden_words = [
+        # Sutkalik / Kunlik
+        "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно", "haftasiga", "соат", "кунлик",
+        # Boshqa narsalar / Buyumlar / Xizmatlar
+        "avto", "mashina", "zapchast", "telefon", "iphone", "samsung", "noutbuk", "kompyuter", 
+        "ish o'rni", "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "talab qilinadi",
+        "ishlaydi", "sotuvchi", "ofischi", "ustaxona", "tozalash", "gilam", "mebel yasash"
+    ]
+    if any(word in full_text for word in forbidden_words):
+        return False
+
+    # 3. Sotishga oid so'zlar (Agar sotish bo'lsa-yu, ijaraga aloqasi bo'lmasa tashlab yuboramiz)
+    sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
+    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kirishga tayyor"]
+    
+    has_sale = any(w in full_text for w in sale_words)
+    has_rental = any(w in full_text for w in rental_words)
+
+    if has_sale and not has_rental:
+        return False
+
+    # 4. Majburiy uy/kvartira kalit so'zlari (Bularsiz e'lon o'tmaydi)
+    housing_keywords = [
+        "kvartira", "kv", "dom", "uy", "komnata", "xona", "xonali", 
+        "квартира", "дом", "комната", "комнатная", "студия", "studio", "novostroyka", "uchastka"
+    ]
+    if not any(kw in full_text for kw in housing_keywords):
+        return False
+
+    return True
+
+
 def send_to_telegram(caption, photo_urls, keyboard, retries=2):
     for attempt in range(1, retries + 1):
         try:
@@ -135,9 +187,8 @@ def send_to_telegram(caption, photo_urls, keyboard, retries=2):
                     timeout=15,
                 )
             else:
-                # Bir nechta rasmni albom (media group) ko'rinishida yuborish
                 media_list = []
-                for idx, url in enumerate(photo_urls[:10]):  # Telegram kopi bilan 10 ta rasm qabul qiladi
+                for idx, url in enumerate(photo_urls[:10]):
                     media_item = {
                         "type": "photo",
                         "media": url
@@ -156,7 +207,6 @@ def send_to_telegram(caption, photo_urls, keyboard, retries=2):
                     timeout=20,
                 )
 
-                # Telegram qoidasiga ko'ra sendMediaGroup'ga tugma qo'shib bo'lmaydi, shuning uchun tugmani pastdan alohida yuboramiz
                 if res.status_code == 200:
                     scraper.post(
                         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -213,31 +263,12 @@ def main():
             continue
 
         details = get_offer_details(item_id)
-        description = details.get("description", "")
         
-        title_lower = title.lower()
-        desc_lower = description.lower()
-        full_text = f"{title_lower} {desc_lower}"
-
-        location_data = item.get("location", {})
-        city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
-        region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
-        loc_full = f"{city_name} {region_name}".lower()
-
-        if "toshkent" not in loc_full and "ташкент" not in loc_full:
+        # Keskin va kuchaytirilgan filtrdan o'tkazamiz
+        if not is_valid_housing_rental(item, details):
             continue
 
-        housing_keywords = ["kvartira", "kv", "dom", "uy", "komnata", "квартира", "дом", "комната", "arrenda", "ijara", "аренда"]
-        if not any(kw in full_text for kw in housing_keywords):
-            continue
-
-        daily_keywords = ["sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно"]
-        if any(w in full_text for w in daily_keywords):
-            continue
-
-        if any(w in full_text for w in ["sotiladi", "продается", "sotish"]) and not any(w in full_text for w in ["ijara", "аренда", "arenda"]):
-            continue
-
+        description = details.get("description", "")
         params = details.get("params", [])
         rooms = "1"
         floor = "1"
@@ -261,7 +292,7 @@ def main():
             elif p_key == "m":
                 area = val_str
 
-        if not rooms:
+        if not rooms or rooms == "1":
             m_room = re.search(r'(\d+)\s*-?\s*xon', title, re.IGNORECASE)
             if m_room:
                 rooms = m_room.group(1)
@@ -271,7 +302,8 @@ def main():
         price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
         price_str = f"{price_val}{price_curr}" if price_val else "Kelishilgan holda"
 
-        district_name = location_data.get("district", {}).get("name", "Mirobod tumani") if isinstance(location_data, dict) else "Mirobod tumani"
+        location_data = item.get("location", {})
+        district_name = location_data.get("district", {}).get("name", "Toshkent tumani") if isinstance(location_data, dict) else "Toshkent tumani"
         location_str = f"Toshkent, {district_name}"
 
         phone = get_phone_number(item_id)
@@ -312,7 +344,6 @@ def main():
             f"#id_{item_id}"
         )
 
-        # Barcha rasmlarni yig'ish (faqat bittasini emas, balki bir nechta rasmni olish)
         photos = item.get("photos", [])
         photo_urls = [
             p.get("link", "").replace("{width}", "1000").replace("{height}", "750")
@@ -324,7 +355,7 @@ def main():
         if ok:
             save_seen_id(item_id)
             seen_ids.add(item_id)
-            log.info("✅ Ko'p rasmli e'lon kanalga joylandi: #id_%s", item_id)
+            log.info("✅ Toza uy e'loni kanalga joylandi: #id_%s", item_id)
             sent_count += 1
             if sent_count >= 2:
                 break
