@@ -22,7 +22,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/"
+# 400 xatosi chiqmasligi uchun URL toza holatga keltirildi
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "toshkent_ijaraga"
 TELEGRAM_CONTACT = "@turayev_bek"
@@ -121,27 +122,45 @@ def is_valid_housing_rental(item, details, item_id):
     description = details.get("description", "")
     full_text = f"{title} {description}".lower()
 
-    # Majburiy talab: Uy yoki kvartiraga oid so'zlar bo'lishi shart
+    # 1. Manzil: Faqat Toshkent shahri ekanligini tekshirish
+    location_data = item.get("location", {})
+    city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
+    region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
+    loc_full = f"{city_name} {region_name}".lower()
+
+    if "toshkent" not in loc_full and "ташкент" not in loc_full:
+        if "toshkent" not in full_text and "ташкент" not in full_text:
+            log.info("Rad etildi [%s]: Toshkent shahri emas -> Manzil: %s", item_id, loc_full)
+            return False
+
+    # 2. Kategoriya tekshiruvi: Ko'chmas mulk kategoriyasi (category_id 15) ekanligini ta'minlash
+    cat_id = item.get("category_id")
+    if cat_id and cat_id != 15:
+        log.info("Rad etildi [%s]: Ko'chmas mulk kategoriyasiga kirmaydi (category_id: %s)", item_id, cat_id)
+        return False
+
+    # 3. Majburiy talab: Uy yoki kvartiraga oid so'zlar bo'lishi shart
     housing_keywords = [
         "kvartira", "kvartirasi", "xonali", "komnat", "komnata", 
-        "studiya", "studio", "dom", "uylar", "kvartiralar", "ijara uy", "uy ijaraga"
+        "studiya", "studio", "dom", "uylar", "kvartiralar", "ijara uy", "uy ijaraga", "xonadon"
     ]
     has_housing = any(w in full_text for w in housing_keywords)
     if not has_housing:
         log.info("Rad etildi [%s]: Matnda uy/kvartira so'zlari topilmadi", item_id)
         return False
 
-    # Kunlik (sutkalik), noturar, ofis va boshqa keraksiz narsalar
+    # 4. Kunlik (sutkalik), noturar, ofis va boshqa keraksiz narsalar
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
-        "ofis", "noturar", "bino", "ombor", "uchastka sotiladi", "hovli sotiladi"
+        "ofis", "noturar", "bino", "ombor", "uchastka sotiladi", "hovli sotiladi",
+        "telefon", "noutbuk", "televizor", "avto", "mashina"
     ]
     for word in forbidden_words:
         if word in full_text:
             log.info("Rad etildi [%s]: Qora ro'yxatdagi so'z topildi -> '%s'", item_id, word)
             return False
 
-    # Sotishga oid so'zlar (faqat ijara bo'lishi shart)
+    # 5. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
     rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi"]
     
@@ -235,20 +254,14 @@ def main():
     seen_ids = load_seen_ids()
 
     try:
-        log.info("OLX API'dan Toshkent ko'chmas mulk e'lonlari olinmoqda...")
+        log.info("OLX API'dan e'lonlar olinmoqda...")
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.olx.uz/",
             "Accept": "application/json, text/plain, */*"
         }
-        params = {
-            "offset": 0,
-            "limit": 50,
-            "category_id": 15,  # Ko'chmas mulk kategoriyasi
-            "region_id": 26     # Toshkent shahri
-        }
         
-        res = scraper.get(API_URL, params=params, headers=headers, timeout=20)
+        res = scraper.get(API_URL, headers=headers, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
         if res.status_code != 200:
@@ -256,7 +269,7 @@ def main():
             return
 
         offers = res.json().get("data", [])
-        log.info("OLX'dan olingan e'lonlar soni: %d", len(offers))
+        log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
     except Exception as x:
         log.error("OLX so'rov xatosi: %s", x)
         return
