@@ -22,7 +22,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
+# OLX'ning faqat Ko'chmas mulk (Nedvizhimost) kategoriyasi filtri ulandi (category_id=15)
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&category_id=15"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "toshkent_ijaraga"
 TELEGRAM_CONTACT = "@turayev_bek"
@@ -124,7 +125,7 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
             return False
 
-    # 2. MAJBURIY TALAB: Matnda aniq uy yoki ijara so'zlari bo'lishi shart (boshqa narsalar o'tib ketmasligi uchun)
+    # 2. MAJBURIY TALAB: Matnda uy yoki ijara so'zlari bo'lishi shart
     housing_words = [
         "ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", 
         "kvartira", "kv", "xonali", "uy", "komnat", "komnata", 
@@ -132,18 +133,13 @@ def is_valid_housing_rental(item, details, item_id):
     ]
     has_housing = any(w in full_text for w in housing_words)
     if not has_housing:
-        log.info("Rad etildi [%s]: Matnda uy yoki ijara so'zlari topilmadi (boshqa toifa)", item_id)
+        log.info("Rad etildi [%s]: Matnda uy yoki ijara so'zlari topilmadi", item_id)
         return False
 
-    # 3. Kunlik (sutkalik), texnika va boshqa keraksiz narsalar
+    # 3. Kunlik (sutkalik), noturar, ofis va boshqa keraksiz narsalar
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
-        "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor",
-        "sovutgich", "kir yuvish", "pechka", "plita", "aspirator", "duxovka", "agregat",
-        "generator", "stabilizator", "nasos", "radiator", "artel", "lg", "samsung", "bosch",
-        "avto", "mashina", "zapchast", "telefon", "iphone", "noutbuk", "kompyuter",
-        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "gilam", "matras",
-        "ofis", "noturar", "bino", "ombor"
+        "ofis", "noturar", "bino", "ombor", "uchastka sotiladi", "hovli sotiladi"
     ]
     for word in forbidden_words:
         if word in full_text:
@@ -239,7 +235,7 @@ def main():
     seen_ids = load_seen_ids()
 
     try:
-        log.info("OLX API'dan e'lonlar olinmoqda...")
+        log.info("OLX API'dan ko'chmas mulk e'lonlari olinmoqda...")
         res = scraper.get(API_URL, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
@@ -248,7 +244,7 @@ def main():
             return
 
         offers = res.json().get("data", [])
-        log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
+        log.info("OLX'dan olingan ko'chmas mulk e'lonlari soni: %d", len(offers))
     except Exception as x:
         log.error("OLX so'rov xatosi: %s", x)
         return
@@ -321,3 +317,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
