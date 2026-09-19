@@ -124,24 +124,9 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
             return False
 
-    # 2. Narx filtri ($150 - $3000 oralig'i)
-    price_obj = item.get("price", {})
-    price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
-    price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
+    # Narx filtri to'liq olib tashlandi (narxga oid tekshiruvlar yo'q)
 
-    if not price_val or price_val <= 0:
-        log.info("Rad etildi [%s]: Narx ko'rsatilmagan", item_id)
-        return False
-
-    price_in_usd = price_val
-    if price_curr.upper() in ["UZS", "SUM", "СУМ"]:
-        price_in_usd = price_val / 12800.0  # O'rtacha kurs
-
-    if not (150 <= price_in_usd <= 3000):
-        log.info("Rad etildi [%s]: Narx mos emas -> $%.1f", item_id, price_in_usd)
-        return False
-
-    # 3. Kunlik (sutkalik) va boshqa keraksiz narsalar
+    # 2. Kunlik (sutkalik), texnika va boshqa keraksiz narsalar
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
         "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor",
@@ -156,7 +141,7 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Qora ro'yxatdagi so'z topildi -> '%s'", item_id, word)
             return False
 
-    # 4. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
+    # 3. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
     rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kvartira", "xonali", "uy"]
     
@@ -324,7 +309,7 @@ def main():
             seen_ids.add(item_id)
             log.info("✅ Toza uy e'loni kanalga joylandi: #id_%s", item_id)
             sent_count += 1
-            if sent_count >= 3:  # Bir martada ko'pi bilan 3 ta tashlaydigan qildik
+            if sent_count >= 3:
                 break
 
     log.info("Yakunlandi. Jami yuborilgan: %d", sent_count)
@@ -332,3 +317,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
