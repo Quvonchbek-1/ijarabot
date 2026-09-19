@@ -22,8 +22,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-# 400 xatosi chiqmasligi uchun URL asl holiga qaytarildi
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
+API_URL = "https://www.olx.uz/api/v1/offers/"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "toshkent_ijaraga"
 TELEGRAM_CONTACT = "@turayev_bek"
@@ -83,7 +82,11 @@ def save_seen_id(item_id):
 def get_phone_number(item_id):
     try:
         phone_url = f"https://www.olx.uz/api/v1/offers/{item_id}/phones/"
-        res = scraper.get(phone_url, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.olx.uz/",
+        }
+        res = scraper.get(phone_url, headers=headers, timeout=10)
         if res.status_code == 200:
             phones = res.json().get("data", {}).get("phones", [])
             if phones:
@@ -101,7 +104,11 @@ def get_phone_number(item_id):
 def get_offer_details(item_id):
     try:
         url = f"https://www.olx.uz/api/v1/offers/{item_id}/"
-        res = scraper.get(url, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.olx.uz/",
+        }
+        res = scraper.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             return res.json().get("data", {})
     except Exception as e:
@@ -114,18 +121,7 @@ def is_valid_housing_rental(item, details, item_id):
     description = details.get("description", "")
     full_text = f"{title} {description}".lower()
 
-    # 1. Manzil: Faqat Toshkent shahri
-    location_data = item.get("location", {})
-    city_name = location_data.get("city", {}).get("name", "") if isinstance(location_data, dict) else ""
-    region_name = location_data.get("region", {}).get("name", "") if isinstance(location_data, dict) else ""
-    loc_full = f"{city_name} {region_name}".lower()
-
-    if "toshkent" not in loc_full and "ташкент" not in loc_full:
-        if "toshkent" not in full_text:
-            log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
-            return False
-
-    # 2. QAT'IY TALAB: Matnda uy yoki kvartiraga oid so'zlar MAJBURIY bo'lishi shart
+    # Majburiy talab: Uy yoki kvartiraga oid so'zlar bo'lishi shart
     housing_keywords = [
         "kvartira", "kvartirasi", "xonali", "komnat", "komnata", 
         "studiya", "studio", "dom", "uylar", "kvartiralar", "ijara uy", "uy ijaraga"
@@ -135,20 +131,17 @@ def is_valid_housing_rental(item, details, item_id):
         log.info("Rad etildi [%s]: Matnda uy/kvartira so'zlari topilmadi", item_id)
         return False
 
-    # 3. Kunlik (sutkalik), noturar, ofis va boshqa barcha keraksiz toifalar (texnika, kiyim, avto va hokazo)
+    # Kunlik (sutkalik), noturar, ofis va boshqa keraksiz narsalar
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
-        "ofis", "noturar", "bino", "ombor", "uchastka", "hovli", 
-        "telefon", "iphone", "samsung", "redmi", "noutbuk", "kompyuter", "televizor",
-        "pylisos", "gilam", "matras", "mebel", "kreslo", "stol", "stul", "kiyim",
-        "avto", "mashina", "zapchast", "bakal", "ishga", "vakansiya", "xizmat"
+        "ofis", "noturar", "bino", "ombor", "uchastka sotiladi", "hovli sotiladi"
     ]
     for word in forbidden_words:
         if word in full_text:
             log.info("Rad etildi [%s]: Qora ro'yxatdagi so'z topildi -> '%s'", item_id, word)
             return False
 
-    # 4. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
+    # Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
     rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi"]
     
@@ -242,8 +235,20 @@ def main():
     seen_ids = load_seen_ids()
 
     try:
-        log.info("OLX API'dan e'lonlar olinmoqda...")
-        res = scraper.get(API_URL, timeout=20)
+        log.info("OLX API'dan Toshkent ko'chmas mulk e'lonlari olinmoqda...")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.olx.uz/",
+            "Accept": "application/json, text/plain, */*"
+        }
+        params = {
+            "offset": 0,
+            "limit": 50,
+            "category_id": 15,  # Ko'chmas mulk kategoriyasi
+            "region_id": 26     # Toshkent shahri
+        }
+        
+        res = scraper.get(API_URL, params=params, headers=headers, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
         if res.status_code != 200:
@@ -251,7 +256,7 @@ def main():
             return
 
         offers = res.json().get("data", [])
-        log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
+        log.info("OLX'dan olingan e'lonlar soni: %d", len(offers))
     except Exception as x:
         log.error("OLX so'rov xatosi: %s", x)
         return
