@@ -22,8 +22,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
 
-# OLX'ning faqat Ko'chmas mulk (Nedvizhimost) kategoriyasi filtri ulandi (category_id=15)
-API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50&category_id=15"
+# 400 xatosi chiqmasligi uchun URL asl holiga qaytarildi
+API_URL = "https://www.olx.uz/api/v1/offers/?offset=0&limit=50"
 SEEN_FILE = "seen_ids.txt"
 INSTAGRAM_LINK = "toshkent_ijaraga"
 TELEGRAM_CONTACT = "@turayev_bek"
@@ -125,21 +125,23 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
             return False
 
-    # 2. MAJBURIY TALAB: Matnda uy yoki ijara so'zlari bo'lishi shart
-    housing_words = [
-        "ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", 
-        "kvartira", "kv", "xonali", "uy", "komnat", "komnata", 
-        "studiya", "studio", "dom", "uylar", "kvartiralar"
+    # 2. QAT'IY TALAB: Matnda uy yoki kvartiraga oid so'zlar MAJBURIY bo'lishi shart
+    housing_keywords = [
+        "kvartira", "kvartirasi", "xonali", "komnat", "komnata", 
+        "studiya", "studio", "dom", "uylar", "kvartiralar", "ijara uy", "uy ijaraga"
     ]
-    has_housing = any(w in full_text for w in housing_words)
+    has_housing = any(w in full_text for w in housing_keywords)
     if not has_housing:
-        log.info("Rad etildi [%s]: Matnda uy yoki ijara so'zlari topilmadi", item_id)
+        log.info("Rad etildi [%s]: Matnda uy/kvartira so'zlari topilmadi", item_id)
         return False
 
-    # 3. Kunlik (sutkalik), noturar, ofis va boshqa keraksiz narsalar
+    # 3. Kunlik (sutkalik), noturar, ofis va boshqa barcha keraksiz toifalar (texnika, kiyim, avto va hokazo)
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
-        "ofis", "noturar", "bino", "ombor", "uchastka sotiladi", "hovli sotiladi"
+        "ofis", "noturar", "bino", "ombor", "uchastka", "hovli", 
+        "telefon", "iphone", "samsung", "redmi", "noutbuk", "kompyuter", "televizor",
+        "pylisos", "gilam", "matras", "mebel", "kreslo", "stol", "stul", "kiyim",
+        "avto", "mashina", "zapchast", "bakal", "ishga", "vakansiya", "xizmat"
     ]
     for word in forbidden_words:
         if word in full_text:
@@ -148,7 +150,12 @@ def is_valid_housing_rental(item, details, item_id):
 
     # 4. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
-    if any(w in full_text for w in sale_words):
+    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi"]
+    
+    has_sale = any(w in full_text for w in sale_words)
+    has_rental = any(w in full_text for w in rental_words)
+
+    if has_sale and not has_rental:
         log.info("Rad etildi [%s]: Bu uy sotish e'loni (ijara emas)", item_id)
         return False
 
@@ -235,7 +242,7 @@ def main():
     seen_ids = load_seen_ids()
 
     try:
-        log.info("OLX API'dan ko'chmas mulk e'lonlari olinmoqda...")
+        log.info("OLX API'dan e'lonlar olinmoqda...")
         res = scraper.get(API_URL, timeout=20)
         log.info("OLX API javob kodi: %s", res.status_code)
         
@@ -244,7 +251,7 @@ def main():
             return
 
         offers = res.json().get("data", [])
-        log.info("OLX'dan olingan ko'chmas mulk e'lonlari soni: %d", len(offers))
+        log.info("OLX'dan olingan umumiy e'lonlar soni: %d", len(offers))
     except Exception as x:
         log.error("OLX so'rov xatosi: %s", x)
         return
@@ -317,4 +324,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
