@@ -108,7 +108,7 @@ def get_offer_details(item_id):
     return {}
 
 
-def is_valid_housing_rental(item, details):
+def is_valid_housing_rental(item, details, item_id):
     title = item.get("title", "")
     description = details.get("description", "")
     full_text = f"{title} {description}".lower()
@@ -120,49 +120,51 @@ def is_valid_housing_rental(item, details):
     loc_full = f"{city_name} {region_name}".lower()
 
     if "toshkent" not in loc_full and "ташкент" not in loc_full:
-        return False
+        if "toshkent" not in full_text:
+            log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
+            return False
 
-    # 2. Narx filtri ($300 - $2000, agar narx yo'q yoki mos kelmasa - tashlab yuboramiz)
+    # 2. Narx filtri ($150 - $3000 oralig'i)
     price_obj = item.get("price", {})
     price_val = price_obj.get("value", 0) if isinstance(price_obj, dict) else 0
     price_curr = price_obj.get("currency", "USD") if isinstance(price_obj, dict) else "USD"
 
     if not price_val or price_val <= 0:
+        log.info("Rad etildi [%s]: Narx ko'rsatilmagan", item_id)
         return False
 
     price_in_usd = price_val
     if price_curr.upper() in ["UZS", "SUM", "СУМ"]:
-        price_in_usd = price_val / 12800.0  # O'rtacha kurs bo'yicha dollarga o'tkazamiz
+        price_in_usd = price_val / 12800.0  # O'rtacha kurs
 
-    if not (300 <= price_in_usd <= 2000):
+    if not (150 <= price_in_usd <= 3000):
+        log.info("Rad etildi [%s]: Narx mos emas -> $%.1f", item_id, price_in_usd)
         return False
 
-    # 3. Haqiqiy ko'chmas mulk parametri tekshiruvi (Texnikalarda 'rooms' parametri bo'lmaydi)
-    params = details.get("params", [])
-    has_rooms_param = any(p.get("key") == "rooms" for p in params)
-    if not has_rooms_param:
-        return False
-
-    # 4. Qora ro'yxat (Texnika, sutkalik va boshqa narsalar)
+    # 3. Kunlik (sutkalik) va boshqa keraksiz narsalar
     forbidden_words = [
+        "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
         "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor",
         "sovutgich", "kir yuvish", "pechka", "plita", "aspirator", "duxovka", "agregat",
         "generator", "stabilizator", "nasos", "radiator", "artel", "lg", "samsung", "bosch",
-        "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
         "avto", "mashina", "zapchast", "telefon", "iphone", "noutbuk", "kompyuter",
-        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "gilam", "matras"
+        "vakansiya", "vacancy", "xizmat", "kurs", "reklama", "ishga", "gilam", "matras",
+        "ofis", "noturar", "bino", "ombor"
     ]
-    if any(word in full_text for word in forbidden_words):
-        return False
+    for word in forbidden_words:
+        if word in full_text:
+            log.info("Rad etildi [%s]: Qora ro'yxatdagi so'z topildi -> '%s'", item_id, word)
+            return False
 
-    # 5. Sotishga oid so'zlar (ijarasiz)
+    # 4. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
-    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi"]
+    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kvartira", "xonali", "uy"]
     
     has_sale = any(w in full_text for w in sale_words)
     has_rental = any(w in full_text for w in rental_words)
 
     if has_sale and not has_rental:
+        log.info("Rad etildi [%s]: Bu uy sotish e'loni (ijara emas)", item_id)
         return False
 
     return True
@@ -272,7 +274,7 @@ def main():
 
         details = get_offer_details(item_id)
         
-        if not is_valid_housing_rental(item, details):
+        if not is_valid_housing_rental(item, details, item_id):
             continue
 
         price_obj = item.get("price", {})
@@ -322,7 +324,7 @@ def main():
             seen_ids.add(item_id)
             log.info("✅ Toza uy e'loni kanalga joylandi: #id_%s", item_id)
             sent_count += 1
-            if sent_count >= 2:
+            if sent_count >= 3:  # Bir martada ko'pi bilan 3 ta tashlaydigan qildik
                 break
 
     log.info("Yakunlandi. Jami yuborilgan: %d", sent_count)
