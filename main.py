@@ -124,9 +124,18 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Toshkent emas -> Manzil: %s", item_id, loc_full)
             return False
 
-    # Narx filtri to'liq olib tashlandi (narxga oid tekshiruvlar yo'q)
+    # 2. MAJBURIY TALAB: Matnda aniq uy yoki ijara so'zlari bo'lishi shart (boshqa narsalar o'tib ketmasligi uchun)
+    housing_words = [
+        "ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", 
+        "kvartira", "kv", "xonali", "uy", "komnat", "komnata", 
+        "studiya", "studio", "dom", "uylar", "kvartiralar"
+    ]
+    has_housing = any(w in full_text for w in housing_words)
+    if not has_housing:
+        log.info("Rad etildi [%s]: Matnda uy yoki ijara so'zlari topilmadi (boshqa toifa)", item_id)
+        return False
 
-    # 2. Kunlik (sutkalik), texnika va boshqa keraksiz narsalar
+    # 3. Kunlik (sutkalik), texnika va boshqa keraksiz narsalar
     forbidden_words = [
         "sutka", "сутки", "sutkaga", "kunlik", "soatiga", "soatlik", "час", "посуточно",
         "ziffler", "qozon", "kotyol", "katyol", "kolonka", "konditsioner", "televizor",
@@ -141,14 +150,9 @@ def is_valid_housing_rental(item, details, item_id):
             log.info("Rad etildi [%s]: Qora ro'yxatdagi so'z topildi -> '%s'", item_id, word)
             return False
 
-    # 3. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
+    # 4. Sotishga oid so'zlar (faqat ijara bo'lishi shart)
     sale_words = ["sotiladi", "продается", "sotish", "выкуп", "ipoteka", "kreditga"]
-    rental_words = ["ijara", "аренда", "arenda", "сдается", "сдам", "beriladi", "kvartira", "xonali", "uy"]
-    
-    has_sale = any(w in full_text for w in sale_words)
-    has_rental = any(w in full_text for w in rental_words)
-
-    if has_sale and not has_rental:
+    if any(w in full_text for w in sale_words):
         log.info("Rad etildi [%s]: Bu uy sotish e'loni (ijara emas)", item_id)
         return False
 
@@ -317,4 +321,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
