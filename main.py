@@ -1,15 +1,17 @@
 """
-OLX.uz -> Telegram kanal boti (ijaraga kvartira e'lonlari).
+OLX.uz -> Telegram kanal (ijaraga kvartira e'lonlari). AWS server uchun.
+
+Har bir e'longa ketma-ket raqam (#33) beriladi, bazaga (bot.db) yoziladi.
+E'lon ostidagi tugma -> bot.py (tarif -> to'lov -> admin tasdig'i -> raqam ochiladi).
 
 Ishga tushirish:
-    python main.py            # oddiy rejim (kanalga yuboradi)
-    python main.py test       # DRY RUN: hech narsa yubormaydi, faqat log
-    python main.py discover "kvartira ijaraga Toshkent"   # category/region/city ID larni topish
+    python main.py            # kanalga yuboradi
+    python main.py test       # DRY RUN
+    python main.py discover "kvartira ijaraga Toshkent"
 
-Kerakli env o'zgaruvchilar (GitHub Secrets):
-    BOT_TOKEN, CHANNEL_ID, BOT_USERNAME
-Ixtiyoriy:
-    CATEGORY_ID, REGION_ID, CITY_ID, DISTRICT_ID, LIMIT, MAX_SEND, MIN_PRICE, MAX_PRICE
+Env (.env): BOT_TOKEN, CHANNEL_ID, BOT_USERNAME
+Ixtiyoriy: CATEGORY_ID, REGION_ID, CITY_ID, DISTRICT_ID, LIMIT, MAX_SEND, MIN_PRICE, MAX_PRICE,
+           ADMIN_NAME, TELEGRAM_CONTACT, FALLBACK_PHONE
 """
 
 import os
@@ -20,18 +22,14 @@ import time
 import json
 import logging
 
-try:
-    import cloudscraper
-except ImportError:  # GitHub Actions'da requirements.txt bo'lmasa
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "cloudscraper"])
-    import cloudscraper
+import cloudscraper
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+import database as db
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("olx_bot")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- CONFIG ----
 
@@ -39,23 +37,22 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip().lstrip("@")
 
-# OLX qidiruv parametrlari. ID larni "python main.py discover ..." bilan tekshiring.
-CATEGORY_ID = os.environ.get("CATEGORY_ID", "1147").strip()   # Kvartira ijaraga (uzoq muddat)
-REGION_ID = os.environ.get("REGION_ID", "5").strip()          # Toshkent shahri
+CATEGORY_ID = os.environ.get("CATEGORY_ID", "1147").strip()
+REGION_ID = os.environ.get("REGION_ID", "5").strip()
 CITY_ID = os.environ.get("CITY_ID", "").strip()
-DISTRICT_ID = os.environ.get("DISTRICT_ID", "").strip()       # masalan Yashnobod
+DISTRICT_ID = os.environ.get("DISTRICT_ID", "").strip()
 
 LIMIT = int(os.environ.get("LIMIT", "50"))
-MAX_SEND = int(os.environ.get("MAX_SEND", "5"))               # bitta run'da nechta post
+MAX_SEND = int(os.environ.get("MAX_SEND", "5"))
 MIN_PRICE_USD = float(os.environ.get("MIN_PRICE", "50"))
 MAX_PRICE_USD = float(os.environ.get("MAX_PRICE", "5000"))
 
-SEEN_FILE = os.environ.get("SEEN_FILE", "seen_ids.txt")
-INSTAGRAM_LINK = os.environ.get("INSTAGRAM_LINK", "toshkent_ijaraga")
-TELEGRAM_CONTACT = os.environ.get("TELEGRAM_CONTACT", "@turayev_bek")
+SEEN_FILE = os.environ.get("SEEN_FILE", os.path.join(BASE_DIR, "seen_ids.txt"))
+ADMIN_NAME = os.environ.get("ADMIN_NAME", "Quvonchbek")
+TELEGRAM_CONTACT = os.environ.get("TELEGRAM_CONTACT", "@Goring3")
 FALLBACK_PHONE = os.environ.get("FALLBACK_PHONE", "")
 
-DRY_RUN = False  # "test" argumenti bilan yoqiladi
+DRY_RUN = False
 
 BASE = "https://www.olx.uz/api/v1/offers/"
 HEADERS = {
@@ -74,27 +71,27 @@ scraper = cloudscraper.create_scraper(
 )
 
 # --------------------------------------------------------------- FILTRLAR ---
-# DIQQAT: kategoriya bo'yicha qidirilayotgani uchun "telefon/televizor/mashina"
-# kabi so'zlarni qora ro'yxatga qo'yish SHART EMAS — ular tavsiflarda doim
-# uchraydi ("kir yuvish mashinasi", "televizor bor") va barcha normal
-# e'lonlarni rad etib yuboradi. Faqat sutkalik ijara va sotuvni filtrlaymiz.
 
 DAILY_PATTERNS = [
     r"sutka", r"сутк", r"посуточ", r"\bkunlik\b", r"kunbay",
     r"soatlik", r"soatiga", r"\bчас(?:ов|а)?\b", r"\bночь\b", r"\bkecha(?:ga|lik)\b",
 ]
-
-SALE_PATTERNS = [
-    r"sotiladi", r"sotuvga", r"продаю", r"продает", r"продажа", r"срочно продам",
-]
-
-RENT_PATTERNS = [
-    r"ijara", r"ijaraga", r"arenda", r"аренд", r"сда(?:ется|ю|м)", r"beriladi", r"снять",
-]
-
+SALE_PATTERNS = [r"sotiladi", r"sotuvga", r"продаю", r"продает", r"продажа", r"срочно продам"]
+RENT_PATTERNS = [r"ijara", r"ijaraga", r"arenda", r"аренд", r"сда(?:ется|ю|м)", r"beriladi", r"снять"]
 NON_HOUSING_PATTERNS = [
     r"\bofis\b", r"\bофис", r"\bombor\b", r"\bсклад", r"noturar", r"нежил",
     r"\bмагазин\b", r"\bdo'kon\b", r"\bуслуг", r"\bhovli\b.*sotil",
+]
+
+# (regex, e'londagi nomi)
+AMENITIES = [
+    (r"kir yuvish|стиральн|стирал|kir mashina", "Kir yuvish mashinasi"),
+    (r"kotyol|kotel|котел|котёл", "Kotyol"),
+    (r"muzlatkich|холодильник", "Muzlatkich"),
+    (r"gaz plita|газов\w* плит|плита|gaz", "Gaz plita"),
+    (r"kondits|кондиц", "Konditsioner"),
+    (r"televizor|телевизор", "Televizor"),
+    (r"wi-?fi|internet|интернет", "Internet"),
 ]
 
 
@@ -108,24 +105,21 @@ def matches(patterns, text):
 # ------------------------------------------------------------------ UTILS ---
 
 def validate_config():
-    problems = []
+    ok = True
     if not BOT_TOKEN:
-        problems.append("BOT_TOKEN bo'sh.")
+        log.error("BOT_TOKEN bo'sh."); ok = False
     if not CHANNEL_ID:
-        problems.append("CHANNEL_ID bo'sh.")
+        log.error("CHANNEL_ID bo'sh."); ok = False
     if not BOT_USERNAME:
-        log.warning("BOT_USERNAME bo'sh — deep link ishlamaydi.")
-    for p in problems:
-        log.error(p)
-    return not problems
+        log.error("BOT_USERNAME bo'sh — tugma bot'ga olib bormaydi."); ok = False
+    return ok
 
 
 def check_bot_access():
     try:
         res = scraper.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/getChat",
-            params={"chat_id": CHANNEL_ID},
-            timeout=15,
+            params={"chat_id": CHANNEL_ID}, timeout=15,
         )
         data = res.json()
         if not data.get("ok"):
@@ -151,7 +145,6 @@ def save_seen_id(item_id):
 
 
 def api_get(url, params=None, timeout=25, tries=3):
-    """OLX API'ga xavfsiz so'rov (qayta urinish bilan)."""
     for attempt in range(1, tries + 1):
         try:
             res = scraper.get(url, headers=HEADERS, params=params, timeout=timeout)
@@ -171,11 +164,7 @@ def api_get(url, params=None, timeout=25, tries=3):
 # ---------------------------------------------------------------- OLX API ---
 
 def fetch_offers():
-    params = {
-        "offset": 0,
-        "limit": LIMIT,
-        "sort_by": "created_at:desc",
-    }
+    params = {"offset": 0, "limit": LIMIT, "sort_by": "created_at:desc"}
     if CATEGORY_ID:
         params["category_id"] = CATEGORY_ID
     if REGION_ID:
@@ -210,7 +199,7 @@ def get_phone_number(item_id):
         if clean.startswith("998"):
             return "+" + clean
         return "+998" + clean.lstrip("0")
-    return FALLBACK_PHONE  # bo'sh bo'lsa — "Botdan ko'ring" deb yoziladi
+    return FALLBACK_PHONE
 
 
 # ------------------------------------------------------------------ PARSE ---
@@ -226,31 +215,37 @@ def get_category_id(item):
 
 def get_location(item):
     loc = item.get("location") or {}
-    city = (loc.get("city") or {}).get("name", "") if isinstance(loc, dict) else ""
-    region = (loc.get("region") or {}).get("name", "") if isinstance(loc, dict) else ""
-    district = (loc.get("district") or {}).get("name", "") if isinstance(loc, dict) else ""
+    if not isinstance(loc, dict):
+        return "", "", ""
+    city = (loc.get("city") or {}).get("name", "")
+    region = (loc.get("region") or {}).get("name", "")
+    district = (loc.get("district") or {}).get("name", "")
     return city, region, district
 
 
 def get_price(item):
-    """OLX narxni params ichida yoki price maydonida qaytaradi."""
-    # 1) to'g'ridan-to'g'ri price
     price = item.get("price")
     if isinstance(price, dict) and price.get("value"):
         return float(price["value"]), price.get("currency", "")
-
-    # 2) params ro'yxati ichidan
     for p in item.get("params", []) or []:
         if p.get("key") == "price":
-            val = (p.get("value") or {})
+            val = p.get("value") or {}
             if isinstance(val, dict) and val.get("value"):
                 return float(val["value"]), val.get("currency", "")
-            label = (p.get("value") or {}).get("label") if isinstance(p.get("value"), dict) else None
+            label = val.get("label") if isinstance(val, dict) else None
             if label:
                 num = re.sub(r"[^\d]", "", label)
                 if num:
                     return float(num), ""
     return 0.0, ""
+
+
+def format_price(value, currency):
+    if not value:
+        return "Kelishiladi"
+    if currency.upper() in ("USD", "$"):
+        return f"{int(value)}$"
+    return f"{int(value):,} so'm".replace(",", " ")
 
 
 def build_text(item, details):
@@ -260,43 +255,53 @@ def build_text(item, details):
     return f"{title}\n{desc}"
 
 
+def param_value(item, *keys):
+    """OLX params ichidan kerakli qiymatni (raqam yoki label) oladi."""
+    for p in item.get("params", []) or []:
+        if p.get("key") in keys:
+            v = p.get("value")
+            if isinstance(v, dict):
+                return str(v.get("key") or v.get("label") or v.get("value") or "")
+            if v is not None:
+                return str(v)
+    return ""
+
+
+def first_number(s):
+    m = re.search(r"\d+(?:[.,]\d+)?", s or "")
+    return m.group(0).replace(",", ".") if m else ""
+
+
 # ---------------------------------------------------------------- FILTRLASH -
 
 def is_valid(item, details, item_id):
     text = build_text(item, details)
 
-    # 1) Kategoriya — asosiy filtr. URL'da category_id berilgani uchun
-    #    odatda hammasi to'g'ri keladi, lekin tekshirib qo'yamiz.
     cat_id = get_category_id(item)
     if CATEGORY_ID and cat_id and cat_id != str(CATEGORY_ID):
         log.info("RAD [%s]: boshqa kategoriya (%s)", item_id, cat_id)
         return False
 
-    # 2) Manzil — Toshkent
     city, region, district = get_location(item)
     loc_full = f"{city} {region} {district}".lower()
     if loc_full.strip() and not re.search(r"toshkent|ташкент|tashkent", loc_full):
         log.info("RAD [%s]: Toshkent emas -> %s", item_id, loc_full.strip())
         return False
 
-    # 3) Sutkalik / soatlik ijara emasligi
     hit = matches(DAILY_PATTERNS, text)
     if hit:
-        log.info("RAD [%s]: sutkalik ijara belgisi -> %s", item_id, hit)
+        log.info("RAD [%s]: sutkalik ijara -> %s", item_id, hit)
         return False
 
-    # 4) Noturar joy (ofis, ombor, do'kon)
     hit = matches(NON_HOUSING_PATTERNS, text)
     if hit:
         log.info("RAD [%s]: noturar joy -> %s", item_id, hit)
         return False
 
-    # 5) Sotuv e'loni (ijara so'zi umuman bo'lmasa)
     if matches(SALE_PATTERNS, text) and not matches(RENT_PATTERNS, text):
         log.info("RAD [%s]: sotuv e'loni", item_id)
         return False
 
-    # 6) Narx oralig'i (faqat USD uchun tekshiramiz)
     value, currency = get_price(item)
     if currency.upper() in ("USD", "$") and value:
         if value < MIN_PRICE_USD or value > MAX_PRICE_USD:
@@ -306,14 +311,87 @@ def is_valid(item, details, item_id):
     return True
 
 
+# ------------------------------------------------------------------ POST ----
+
+def build_caption(post_no, item, details, district, price_str):
+    text = build_text(item, details)
+    low = text.lower()
+
+    rooms = first_number(param_value(item, "number_of_rooms", "rooms"))
+    if not rooms:
+        m = re.search(r"(\d)\s*[- ]?\s*(?:xona|комн|ком\b)", low)
+        rooms = m.group(1) if m else ""
+
+    area = first_number(param_value(item, "total_area", "area", "square"))
+    if not area:
+        m = re.search(r"(\d{2,3})\s*(?:m2|m²|м2|м²|kv\.?\s*m|кв\.?\s*м)", low)
+        area = m.group(1) if m else ""
+
+    floor = first_number(param_value(item, "floor"))
+    total_floors = first_number(param_value(item, "total_floors", "floors"))
+    if not floor:
+        m = re.search(r"(\d{1,2})\s*[-/]?\s*(?:qavat|этаж)", low)
+        floor = m.group(1) if m else ""
+    if not total_floors:
+        m = re.search(r"(\d{1,2})\s*(?:qavatli|этажн)", low)
+        total_floors = m.group(1) if m else ""
+
+    head = "🔥 <b>TEZKOR IJARAGA"
+    head += f" | {html.escape(rooms)} XONALI KVARTIRA" if rooms else " | KVARTIRA"
+    head += "</b> 🔥"
+
+    tags = ["#Kvartira_Ijara"]
+    if district:
+        tags.append("#" + re.sub(r"[^\w]", "", district))
+
+    lines = [head, " ".join(tags), "", f"#{post_no}", ""]
+
+    lines.append(f"📍 {html.escape(district)} tumani" if district else "📍 Toshkent")
+    if rooms:
+        lines.append(f"🛏 {html.escape(rooms)} xonali")
+    if area:
+        lines.append(f"📐 {html.escape(area)} m²")
+    if floor:
+        fl = f"🏢 {html.escape(floor)}-qavat"
+        if total_floors:
+            fl += f" | {html.escape(total_floors)} qavatli bino"
+        lines.append(fl)
+    if re.search(r"\blift\b|лифт", low):
+        lines.append("🛗 Lift mavjud")
+    if re.search(r"mebel|мебел", low) and not re.search(r"mebelsiz|без мебел", low):
+        lines.append("🛋 Mebelli")
+
+    found = [name for rx, name in AMENITIES if re.search(rx, low)]
+    if found:
+        lines += ["", "✅ Ichida mavjud:"] + [f"• {n}" for n in found]
+
+    lines += [
+        "",
+        f"💵 Narx: {html.escape(price_str)}",
+        "",
+        "📞 Aloqa: 🔒 pastdagi tugma orqali",
+        f"🧑‍💻 Admin: {html.escape(ADMIN_NAME)}",
+        html.escape(TELEGRAM_CONTACT),
+    ]
+    return "\n".join(lines)
+
+
+def extract_photos(item):
+    urls = []
+    for p in item.get("photos", []) or []:
+        link = p.get("link") or ""
+        if link:
+            urls.append(link.replace("{width}", "1000").replace("{height}", "750"))
+    return urls
+
+
 # --------------------------------------------------------------- TELEGRAM ---
 
 def tg_post(method, payload, timeout=20):
     try:
         res = scraper.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
-            json=payload,
-            timeout=timeout,
+            json=payload, timeout=timeout,
         )
         data = res.json()
         if not data.get("ok"):
@@ -325,27 +403,21 @@ def tg_post(method, payload, timeout=20):
         return None
 
 
-def send_to_telegram(caption, photo_urls, keyboard):
+def send_to_telegram(post_no, caption, photo_urls, keyboard):
     if DRY_RUN:
         log.info("[DRY RUN] Yuborilardi:\n%s\nRasmlar: %d", caption, len(photo_urls))
         return True
 
     if not photo_urls:
         return bool(tg_post("sendMessage", {
-            "chat_id": CHANNEL_ID,
-            "text": caption,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-            "reply_markup": keyboard,
+            "chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML",
+            "disable_web_page_preview": True, "reply_markup": keyboard,
         }))
 
     if len(photo_urls) == 1:
         return bool(tg_post("sendPhoto", {
-            "chat_id": CHANNEL_ID,
-            "photo": photo_urls[0],
-            "caption": caption[:1024],
-            "parse_mode": "HTML",
-            "reply_markup": keyboard,
+            "chat_id": CHANNEL_ID, "photo": photo_urls[0],
+            "caption": caption[:1024], "parse_mode": "HTML", "reply_markup": keyboard,
         }))
 
     media = []
@@ -358,19 +430,15 @@ def send_to_telegram(caption, photo_urls, keyboard):
 
     ok = tg_post("sendMediaGroup", {"chat_id": CHANNEL_ID, "media": media}, timeout=30)
     if not ok:
-        # media group ishlamasa — bitta rasm bilan urinib ko'ramiz
         return bool(tg_post("sendPhoto", {
-            "chat_id": CHANNEL_ID,
-            "photo": photo_urls[0],
-            "caption": caption[:1024],
-            "parse_mode": "HTML",
-            "reply_markup": keyboard,
+            "chat_id": CHANNEL_ID, "photo": photo_urls[0],
+            "caption": caption[:1024], "parse_mode": "HTML", "reply_markup": keyboard,
         }))
 
     # media group tugmani qo'llab-quvvatlamaydi -> alohida xabar
     tg_post("sendMessage", {
         "chat_id": CHANNEL_ID,
-        "text": "🔓 Telefon raqamini ko'rish uchun:",
+        "text": f"👆 #{post_no} — telefon raqamini ko'rish uchun tugmani bosing:",
         "reply_markup": keyboard,
     })
     return True
@@ -379,7 +447,6 @@ def send_to_telegram(caption, photo_urls, keyboard):
 # -------------------------------------------------------------- DISCOVERY ---
 
 def discover(query):
-    """Kerakli category_id / region_id / district_id ni topish uchun."""
     data = api_get(BASE, params={"query": query, "limit": 20})
     if not data:
         log.error("Discover ishlamadi.")
@@ -408,20 +475,13 @@ def discover(query):
 # ------------------------------------------------------------------- MAIN ---
 
 def main():
-    log.info("--- BOT ISHGA TUSHDI (dry_run=%s) ---", DRY_RUN)
+    log.info("--- SKRAPER ISHGA TUSHDI (dry_run=%s) ---", DRY_RUN)
 
     if not DRY_RUN:
         if not validate_config() or not check_bot_access():
             return
 
-    save_offer = None
-    try:
-        from database import init_db, save_offer as _save_offer
-        init_db()
-        save_offer = _save_offer
-    except Exception as e:
-        log.warning("database.py ulanmadi (%s) — DB'siz davom etamiz.", e)
-
+    db.init_db()
     seen_ids = load_seen_ids()
     offers = fetch_offers()
     if not offers:
@@ -439,59 +499,37 @@ def main():
 
         checked += 1
         details = get_offer_details(item_id)
-        time.sleep(0.5)  # OLX'ni charchatmaslik uchun
+        time.sleep(0.5)
 
         if not is_valid(item, details, item_id):
             continue
 
         title = item.get("title", "") or "E'lon"
         value, currency = get_price(item)
-        price_str = f"{int(value):,} {currency}".replace(",", " ") if value else "Kelishiladi"
-
+        price_str = format_price(value, currency)
         city, region, district = get_location(item)
-        location_str = ", ".join([x for x in ["Toshkent", district] if x]) or "Toshkent"
+        location_str = ", ".join([x for x in ["Toshkent", district] if x])
 
         phone = get_phone_number(item_id)
-        phone_line = phone if phone else "botdan ko'ring 👇"
 
-        if save_offer:
-            try:
-                save_offer(item_id, title, phone or "", price_str, location_str)
-            except Exception as e:
-                log.warning("DB saqlash xatosi: %s", e)
+        post_no = db.next_post_no()          # <- ketma-ket ID (#33, #34, ...)
+        caption = build_caption(post_no, item, details, district, price_str)
 
-        deep_link = (
-            f"https://t.me/{BOT_USERNAME}?start=offer_{item_id}"
-            if BOT_USERNAME else item.get("url", "https://www.olx.uz")
-        )
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=offer_{post_no}"
         keyboard = {"inline_keyboard": [[
             {"text": "🔓 Telefon raqamini ko'rish", "url": deep_link}
         ]]}
 
-        caption = (
-            f"🏠 <b>{html.escape(title)}</b>\n\n"
-            f"📍 Manzil: {html.escape(location_str)}\n"
-            f"💵 Narx: {html.escape(price_str)}\n"
-            f"📞 Tel: {html.escape(phone_line)}\n\n"
-            f"📸 INSTAGRAM: {INSTAGRAM_LINK}\n"
-            f"📩 TELEGRAM: {TELEGRAM_CONTACT}\n\n"
-            f"#id_{item_id}"
-        )
+        photo_urls = extract_photos(item)
 
-        photo_urls = []
-        for p in item.get("photos", []) or []:
-            link = p.get("link") or ""
-            if link:
-                photo_urls.append(
-                    link.replace("{width}", "1000").replace("{height}", "750")
-                )
-
-        if send_to_telegram(caption, photo_urls, keyboard):
-            save_seen_id(item_id)
+        if send_to_telegram(post_no, caption, photo_urls, keyboard):
+            if not DRY_RUN:
+                db.save_offer(post_no, item_id, title, phone or "", price_str, location_str)
+                save_seen_id(item_id)
             seen_ids.add(item_id)
             sent += 1
-            log.info("✅ Yuborildi: #id_%s — %s", item_id, title[:60])
-            time.sleep(2)  # Telegram flood limitidan saqlanish
+            log.info("✅ Yuborildi: #%s (OLX %s) — %s", post_no, item_id, title[:60])
+            time.sleep(2)
 
     log.info("Yakunlandi. Tekshirildi: %d, yuborildi: %d", checked, sent)
 
